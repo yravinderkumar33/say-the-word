@@ -1,0 +1,254 @@
+@import 'tailwindcss';
+
+/* The overlay window is transparent; only the pill itself is painted. */
+html.overlay,
+html.overlay body {
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+/* --- The pill ---------------------------------------------------------------------- */
+
+html.overlay {
+  /* Lets the pill's width animate to and from the width of its message. */
+  interpolate-size: allow-keywords;
+}
+
+.pill-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* Room for the shadow, which a transparent window would otherwise cut off. */
+  padding-bottom: 14px;
+}
+
+.pill {
+  --pill-ease: cubic-bezier(0.2, 0.9, 0.25, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 40px;
+  height: 8px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(14 14 16 / 0.5);
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.18),
+    0 2px 10px rgb(0 0 0 / 0.28);
+  color: white;
+  font:
+    500 12.5px/1 -apple-system,
+    BlinkMacSystemFont,
+    'SF Pro Text',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition:
+    width 240ms var(--pill-ease),
+    height 240ms var(--pill-ease),
+    padding 240ms var(--pill-ease),
+    background-color 160ms linear;
+}
+
+.pill[data-state='starting'],
+.pill[data-state='listening'] {
+  width: 78px;
+  height: 28px;
+  background: rgb(14 14 16 / 0.93);
+}
+
+/* At rest it is a button: a click starts a hands-free recording. */
+.pill[data-state='resting']:hover {
+  width: 52px;
+  height: 10px;
+  background: rgb(14 14 16 / 0.85);
+}
+
+/* Hands-free: no key is held, so Stop and Cancel sit beside the bars. */
+.pill[data-state='listening'][data-hands-free='true'] {
+  width: 136px;
+  padding: 0 4px 0 16px;
+  justify-content: space-between;
+}
+
+.pill-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Stop is the thing to press, so it is the one that stands out. */
+.pill-icon-button[data-icon='stop'] {
+  background: rgb(255 255 255 / 0.16);
+  color: white;
+}
+
+.pill-icon-button[data-icon='stop']:hover {
+  background: rgb(255 255 255 / 0.32);
+}
+
+.pill[data-state='processing'] {
+  width: 84px;
+  height: 28px;
+  padding: 0 4px 0 16px;
+  justify-content: space-between;
+  background: rgb(14 14 16 / 0.93);
+}
+
+.pill[data-state='recovery'] {
+  width: max-content;
+  max-width: 400px;
+  height: 32px;
+  padding: 0 5px 0 15px;
+  background: rgb(14 14 16 / 0.95);
+}
+
+/* Whatever the pill holds fades in after the capsule has started to grow. */
+.pill > * {
+  animation: pill-in 200ms 60ms ease-out both;
+}
+
+@keyframes pill-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.pill-bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+}
+
+.pill-bars span {
+  width: 3px;
+  height: 16px;
+  border-radius: 2px;
+  background: white;
+  transform: scaleY(0.14);
+}
+
+/* Flat, dim and slowly breathing: the microphone is not being heard yet. */
+.pill[data-state='starting'] .pill-bars {
+  animation: pill-waiting 1.1s ease-in-out infinite;
+}
+
+/* The bars are already there when the pill goes live. Without this they would start
+   the fade-in again and blink out at the very moment that says "speak now". */
+.pill[data-state='listening'] .pill-bars {
+  animation: none;
+}
+
+@keyframes pill-waiting {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.pill-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pill-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: white;
+  animation: pill-dot 1s ease-in-out infinite;
+}
+
+.pill-dots span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.pill-dots span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes pill-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+.pill-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: rgb(255 255 255 / 0.92);
+}
+
+.pill-button {
+  flex: none;
+  height: 22px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.16);
+  color: white;
+  font: inherit;
+  font-weight: 600;
+  cursor: default;
+  transition: background-color 120ms linear;
+}
+
+.pill-button:hover {
+  background: rgb(255 255 255 / 0.28);
+}
+
+.pill-icon-button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: rgb(255 255 255 / 0.55);
+  cursor: default;
+  transition:
+    background-color 120ms linear,
+    color 120ms linear;
+}
+
+.pill-icon-button:hover {
+  background: rgb(255 255 255 / 0.16);
+  color: white;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill,
+  .pill > * {
+    transition: none;
+    animation: none;
+  }
+
+  .pill[data-state='starting'] .pill-bars,
+  .pill-dots span {
+    animation: none;
+  }
+}

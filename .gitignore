@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+out/
+dist/
+coverage/
+
+# Swift helper build
+native/flow-helper/.build/
+resources/bin/
+
+# Local signing identity (see scripts/setup-signing.mjs)
+electron-builder.env
+
+# Personal evaluation recordings never leave this machine
+tests/fixtures/personal/
+
+# Generated speech fixtures (npm run fixtures)
+tests/fixtures/audio/
+
+# Tooling and OS noise
+.playwright-mcp/
+.DS_Store
+*.log
+.env
+.env.*

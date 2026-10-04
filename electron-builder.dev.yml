@@ -1,0 +1,15 @@
+# Local development build: its own bundle id and name, so macOS tracks its
+# Accessibility and Microphone grants separately from a release install.
+extends: ./electron-builder.yml
+appId: app.whisperflow.desktop.dev
+productName: Whisper Flow Dev
+
+# Marks this as the build made for development: only it, and a run from the source
+# tree, act on the test switches (see src/shared/test-switches.ts).
+extraMetadata:
+  whisperFlowDevBuild: true
+
+mac:
+  # No trip to Apple's timestamp server for each of the bundle's signed files: it made
+  # one local build take seven minutes. A release build keeps its timestamps.
+  timestamp: none

@@ -1,0 +1,55 @@
+# Whisper Flow
+
+Local-first dictation app for macOS: Electron + TypeScript, one Swift helper, a local speech recognizer, optional Ollama cleanup. The design and plan are in `docs/`.
+
+## Before starting work
+
+1. Read `docs/tracker.md` for the current phase and what is waiting on a person.
+2. Read the latest entry in `docs/progress.md`.
+3. The phase definitions and gates are in `docs/03-implementation-phases.md`; verified technical facts (versions, protocols, gotchas) are in `docs/04-implementation-reference.md`.
+
+## Working agreements
+
+- **Keep the tracker and the log current.** Update `docs/tracker.md` (task status, gate outcomes) and add a dated entry to `docs/progress.md` (what was done, evidence, decisions, deviations) in the same change as the work. Record gate measurements in `docs/benchmarks.md`.
+- **Follow the phase order and gates.** Do not build on a gate that has not been measured.
+- **Product logic lives in TypeScript.** The Swift helper is OS glue only.
+- **Verify before claiming.** A task is done when its check has run and passed; say which check.
+- **Privacy rules are requirements:** never log transcript text; no network use beyond loopback Ollama and downloads or update checks the user starts; refuse Ollama models with remote-host metadata.
+- **Licences:** adapt code only from the MIT projects listed in `docs/04-implementation-reference.md` section H, with attribution. Do not copy from GPL or AGPL projects, and copy nothing from Wispr Flow.
+
+## Commands
+
+| Command                                        | Use                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run check`                                | Type-check, lint, format check, unit tests, Swift tests. Run before calling any change done.                                                                                                                                                                                                                                                                                                                                           |
+| `npm run smoke`                                | Builds, then starts every part once and checks they can talk to each other; with the speech model on disk it also transcribes a recording. Needs no permissions.                                                                                                                                                                                                                                                                       |
+| `npm run test:app`                             | Whole dictations in the running app: a recording stands in for the microphone, faults are injected (cancel at every stage, worker killed, microphone lost, interruption). **Does not listen to keys, post keys, take focus or touch the clipboard, so it can run at any time.** `-- --repeat 10` is the dependability run; `-- --latency 20` and `-- --real-mic 20` measure the latency gates; `-- --packaged` tests the packaged app. |
+| `npm run test:e2e`                             | The real key tap and the real paste, into TextEdit. Every run starts as a first launch does: Accessibility "arrives" after the app is up. Takes keyboard focus for about 45 s.                                                                                                                                                                                                                                                         |
+| `npm run test:helper:integration`              | Helper against the real OS (event tap, paste into TextEdit). Takes keyboard focus.                                                                                                                                                                                                                                                                                                                                                     |
+| `npm run pack`                                 | Signed `.app`, built and verified in `dist/.staging` (signature, entitlements, helper, speech library, packaged smoke) and only then moved into `dist/`. About half a minute.                                                                                                                                                                                                                                                          |
+| `npm run eval:stt`                             | Scores the recognizer on the dictations evaluation mode saved. Prints transcript text unless `-- --quiet`.                                                                                                                                                                                                                                                                                                                             |
+| `npm run eval:cleanup`                         | The same set through Cleaned mode with the local Ollama. `-- --samples` uses written samples. Prints text unless `-- --quiet`.                                                                                                                                                                                                                                                                                                         |
+| `npm run fixtures` / `npm run models:download` | The test recordings and the speech model that the app tests need.                                                                                                                                                                                                                                                                                                                                                                      |
+| `npm run dev`                                  | Development mode with hot reload.                                                                                                                                                                                                                                                                                                                                                                                                      |
+
+## Things that are easy to get wrong
+
+- **Permissions in development.** Under `npm run dev`, macOS attributes Accessibility and Microphone to the terminal that started it. Test permission behaviour on the packaged build, launched with `open -n "dist/mac-arm64/Whisper Flow Dev.app"`.
+- **Preloads are sandboxed** and must stay self-contained; `scripts/check-build.mjs` enforces this.
+- **The capture worklet** must be imported with `?worker&url`; a plain `?url` import ships raw TypeScript.
+- **electron-vite 5 predates Electron 44.** Build targets are set explicitly in `electron.vite.config.ts`, which also carries a shim for a crash when output is not a terminal.
+- **TypeScript is pinned to 6.0.x** because typescript-eslint does not support 7 yet.
+- **Quit Wispr Flow before testing shortcuts**; two apps tapping `Fn` will fight.
+- **Someone may be using the Mac while tests run.** Three things have gone wrong this way, all on 2026-10-03: a focus-taking test may have pasted test text into another app; a test app with the key tap active swallowed the user's own `Fn` presses; and an Electron app started from the terminal came to the front and took keyboard focus. The rules that came out of it:
+  - Prefer `npm run test:app`. It runs the app with `WHISPER_FLOW_QUIET=1` (no key tap, never comes to the front) and drives it through the debug control line.
+  - `test:helper:integration` and `test:e2e` post system-wide key events and take focus. Run them sparingly, and say so when you do. Any new test of this kind must set `WHISPER_FLOW_PASTE_ONLY_INTO` and confirm its target app is frontmost before every key press.
+  - The switches are listed in `docs/04-implementation-reference.md` under "Test tools and safeguards".
+- **macOS answers some permission questions once per process.** `CGPreflightPostEventAccess` asks the first time and repeats that answer for good. The helper once asked before Accessibility was granted, and then refused every paste for as long as it lived (2026-10-03). Decide on `AXIsProcessTrusted`, which follows the setting, and never on the preflight alone. The app also replaces the helper with a fresh process when the grant arrives while it is running.
+- **A run that starts with permissions already granted says nothing about a first launch.** The order "start, then grant" is its own case. `test:e2e` imitates it (`FLOW_HELPER_GRANT_AFTER_MS`); only a person can do the real thing.
+- **When a dictation misbehaves, read the log before guessing:** `~/Library/Logs/Whisper Flow/main.log` (tray → Show Log). It has the shortcut events, the states, the app the text was meant for, and the reason for any refused paste. How to read macOS's own log when there is none is in `docs/04-implementation-reference.md`, under "Finding out what happened to a dictation".
+- **Key events posted by a program need a keyboard's pace.** Six events inside 3 ms from a process that exits at once lost their last event now and then, and a lost key-up leaves everything believing the key is held. The test tool spaces events and waits before exiting; keep that in any new one.
+- **Never compare `URL.origin` for `app://` pages.** It is the string `"null"` for that scheme. Use `isOwnPageUrl` (`src/main/app-url.ts`).
+- **The overlay gets its port to the speech worker only after the model has loaded.** Before that the worker would drop the frames.
+- **Transcript text must never be printed**, including by tests: assert on counts and on the word error rate against text the test supplied (`expect` on the debug control line).
+- **A model is never contacted before it has passed the local-only check** (`LocalOnlyGate`), not even to warm it up. Cleaned mode must always have an answer on time: whatever the model does, the rules-only text is the fallback.
+- **Accessibility reads go through the frontmost app's element.** The system-wide element fails with `cannotComplete` from the helper on macOS 26.

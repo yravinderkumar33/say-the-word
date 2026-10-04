@@ -1,0 +1,40 @@
+# Release identity. Local builds use electron-builder.dev.yml, which overrides the
+# id and name so that development permissions never mix with a release install.
+appId: app.whisperflow.desktop
+productName: Whisper Flow
+copyright: Copyright © 2026 Whisper Flow contributors
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**
+
+# The app's own code is bundled by electron-vite. The one runtime dependency is the
+# speech library, which ships prebuilt binaries, so nothing needs rebuilding.
+npmRebuild: false
+
+# Native code cannot be loaded from inside the archive: the speech addon and the
+# libraries beside it must exist as real files, where they are also signed.
+asarUnpack:
+  - node_modules/sherpa-onnx-node/**
+  - node_modules/sherpa-onnx-darwin-*/**
+
+extraResources:
+  - from: resources/bin
+    to: bin
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dir
+      arch: [arm64]
+  minimumSystemVersion: '14.0'
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+  extendInfo:
+    NSMicrophoneUsageDescription: Whisper Flow listens only while you hold the dictation key. Audio stays on this Mac.
