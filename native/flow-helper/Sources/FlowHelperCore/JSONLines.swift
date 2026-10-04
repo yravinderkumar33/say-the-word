@@ -27,4 +27,12 @@ public enum JSONLines {
         else { return nil }
         return value as? Int
     }
+
+    /// Reads a number field, whole or not, refusing booleans as `integer` does.
+    public static func number(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID()
+        else { return nil }
+        return number.doubleValue
+    }
 }

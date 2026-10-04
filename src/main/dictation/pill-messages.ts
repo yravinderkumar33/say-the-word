@@ -35,7 +35,11 @@ export function pillMessage(
     case 'targetChanged':
       return alert('Focus moved, so nothing was pasted', true)
     case 'secureField':
-      return alert('Password field: nothing was pasted', true)
+      // With only Secure Input to go on, the field may or may not be a password field.
+      // The message says what is known, and names the thing the user can look up.
+      return notice.because === 'secureInput'
+        ? alert('Secure Input is on: nothing was pasted', true)
+        : alert('Password field: nothing was pasted', true)
     case 'pasteFailed':
       return alert('Could not paste', hasText(notice.sessionId))
     case 'failed':
@@ -48,6 +52,26 @@ export function pillMessage(
     case 'copied':
       return quiet('Copied')
   }
+}
+
+/**
+ * What the pill says when the clipboard was not put back after a paste, or null when
+ * there is nothing to say. The paste itself went through, so this is said quietly.
+ *
+ * When the user copied something after the paste, they have what they copied and need
+ * no telling. Otherwise what they had on the clipboard is gone, and until now only the
+ * log said so.
+ */
+export function clipboardMessage(reason: string | undefined): PillRecovery | null {
+  if (reason === 'notSaved') {
+    // Too large, too slow, or with a format that could not be read: it was not copied,
+    // and the text that was pasted is what the clipboard holds now.
+    return { message: 'The clipboard now holds this dictation', canCopy: false, sound: false }
+  }
+  if (reason === 'failed') {
+    return { message: 'The clipboard could not be put back', canCopy: false, sound: false }
+  }
+  return null
 }
 
 /** Errors from the helper bridge are written for the log, not for the pill. */

@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { HelperEvent } from '@shared/helper-protocol'
-import { HelperBridge } from '../../src/main/native/helper-bridge'
+import { HelperBridge, PASTE_EXPIRY_MS } from '../../src/main/native/helper-bridge'
 
 const fakeHelper = fileURLToPath(new URL('../fixtures/fake-helper.mjs', import.meta.url))
 const bridges: HelperBridge[] = []
@@ -44,7 +44,7 @@ describe('HelperBridge', () => {
 
     expect(ready).toEqual({
       type: 'ready',
-      protocol: 2,
+      protocol: 3,
       accessibilityTrusted: true,
       tapInstalled: true,
     })
@@ -74,6 +74,18 @@ describe('HelperBridge', () => {
       outcome: 'targetChanged',
       detail: 'window',
     })
+  })
+
+  it('tells the helper when it stops waiting for a paste, and takes "too late" for an answer', async () => {
+    const bridge = startBridge()
+    await bridge.whenReady()
+
+    const result = await bridge.paste({ text: 'too late', targetId: 7 })
+
+    expect(result.outcome).toBe('expired')
+    const allowedMs = Number(result.detail?.replace('allowed:', ''))
+    expect(allowedMs).toBeGreaterThan(PASTE_EXPIRY_MS - 1_000)
+    expect(allowedMs).toBeLessThanOrEqual(PASTE_EXPIRY_MS)
   })
 
   it('emits helper events', async () => {
@@ -125,7 +137,7 @@ describe('HelperBridge', () => {
     // It comes back on its own, and the shortcut table is sent again.
     const reconfigured = nextEvent(bridge, 'tapState')
     const ready = await bridge.whenReady()
-    expect(ready.protocol).toBe(2)
+    expect(ready.protocol).toBe(3)
     expect(await reconfigured).toMatchObject({ reason: 'configured:2' })
   })
 
@@ -157,7 +169,7 @@ describe('HelperBridge', () => {
     // Ended from outside, so there is no exit code; and a fresh one takes its place.
     expect(await exited).toBeNull()
     const ready = await bridge.whenReady()
-    expect(ready.protocol).toBe(2)
+    expect(ready.protocol).toBe(3)
     await expect(bridge.ping()).resolves.toEqual({ pong: true })
   })
 

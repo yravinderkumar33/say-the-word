@@ -106,43 +106,117 @@ struct SecureFieldPolicyTests {
         #expect(terminal == nil)
     }
 
-    @Test func secureInputThatHasBeenOnTooLongIsStuckNotAPasswordField() {
-        let fresh = SecureFieldPolicy.reason(
+    @Test func secureInputLeftOnStillRefusesAnAmbiguousCurrentField() {
+        let reason = SecureFieldPolicy.reason(
             elementIsSecure: false,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputHeldFor: 5,
-            frontmostPid: Self.browser,
-            bundleId: "com.microsoft.VSCode"
-        )
-        let stale = SecureFieldPolicy.reason(
-            elementIsSecure: false,
-            secureInputEnabled: true,
-            secureInputHolderPid: Self.browser,
-            secureInputHeldFor: SecureFieldPolicy.freshFor + 1,
+            secureInputLeftOn: true,
             frontmostPid: Self.browser,
             bundleId: "com.microsoft.VSCode"
         )
         let stuck = SecureFieldPolicy.isStuck(
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputHeldFor: SecureFieldPolicy.freshFor + 1,
+            secureInputLeftOn: true,
             frontmostPid: Self.browser
         )
 
-        #expect(fresh == "secureInput")
-        #expect(stale == nil, "macOS can leave it on after the lock screen; that must not stop dictation.")
+        #expect(reason == "secureInput", "History cannot prove that the current field is safe.")
         #expect(stuck == true)
     }
 
-    @Test func aPasswordFieldByRoleIsRefusedHoweverLongSecureInputHasBeenOn() {
+    @Test func aPasswordFieldFocusedForAnHourIsStillRefused() {
+        // What the helper sees while someone leaves a browser's password field focused:
+        // one reading a second, the browser in front and holding Secure Event Input.
+        var history = SecureInputHistory()
+        for second in stride(from: 0.0, through: 3_600, by: 1) {
+            history.observe(enabled: true, holder: Self.browser, frontmost: Self.browser, at: second)
+        }
+
+        let reason = SecureFieldPolicy.reason(
+            elementIsSecure: false,
+            secureInputEnabled: true,
+            secureInputHolderPid: Self.browser,
+            secureInputLeftOn: history.leftOn,
+            frontmostPid: Self.browser,
+            bundleId: "com.brave.Browser"
+        )
+        let stuck = SecureFieldPolicy.isStuck(
+            secureInputEnabled: true,
+            secureInputHolderPid: Self.browser,
+            secureInputLeftOn: history.leftOn,
+            frontmostPid: Self.browser
+        )
+
+        #expect(reason == "secureInput", "Time alone is no evidence that the hold is stuck.")
+        #expect(stuck == false)
+    }
+
+    @Test func returningToAPasswordFieldAfterABackgroundHoldIsRefused() {
+        var history = SecureInputHistory()
+        history.observe(enabled: true, holder: Self.browser, frontmost: Self.browser, at: 0)
+        for second in stride(from: 1.0, through: 6, by: 1) {
+            history.observe(enabled: true, holder: Self.browser, frontmost: Self.otherApp, at: second)
+        }
+        history.observe(enabled: true, holder: Self.browser, frontmost: Self.browser, at: 7)
+
+        let reason = SecureFieldPolicy.reason(
+            elementIsSecure: false,
+            secureInputEnabled: true,
+            secureInputHolderPid: Self.browser,
+            secureInputLeftOn: history.leftOn,
+            frontmostPid: Self.browser,
+            bundleId: "com.google.Chrome"
+        )
+
+        #expect(history.leftOn == true, "The diagnostic marker was set by the background hold.")
+        #expect(reason == "secureInput", "The newly focused password field exposes no secure AX role.")
+    }
+
+    @Test func aSamePidHoldRestartBetweenSamplesCannotInheritAPasteExemption() {
+        var history = SecureInputHistory()
+        history.observe(enabled: true, holder: Self.browser, frontmost: Self.otherApp, at: 0)
+        history.observe(enabled: true, holder: Self.browser, frontmost: Self.otherApp, at: 5)
+        // A disable and re-enable by this PID can happen before the next sample.
+        // Neither event reaches the watcher; a new password field looks like the
+        // previous hold. That ambiguity must still refuse automatic paste.
+        history.observe(enabled: true, holder: Self.browser, frontmost: Self.browser, at: 6)
+
+        let secure = SecureFieldPolicy.isSecure(
+            elementIsSecure: false,
+            secureInputEnabled: true,
+            secureInputHolderPid: Self.browser,
+            secureInputLeftOn: history.leftOn,
+            frontmostPid: Self.browser,
+            bundleId: "com.google.Chrome"
+        )
+
+        #expect(history.leftOn == true, "Sampling cannot distinguish the old hold from a new one.")
+        #expect(secure == true)
+    }
+
+    @Test func aPasswordFieldByRoleIsRefusedEvenWhenSecureInputWasLeftOn() {
         let reason = SecureFieldPolicy.reason(
             elementIsSecure: true,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputHeldFor: 10_000,
+            secureInputLeftOn: true,
             frontmostPid: Self.browser,
             bundleId: "com.apple.Safari"
+        )
+
+        #expect(reason == "element")
+    }
+
+    @Test func theTerminalExceptionNeverOverridesASecureElement() {
+        let reason = SecureFieldPolicy.reason(
+            elementIsSecure: true,
+            secureInputEnabled: true,
+            secureInputHolderPid: Self.browser,
+            secureInputLeftOn: true,
+            frontmostPid: Self.browser,
+            bundleId: "com.apple.Terminal"
         )
 
         #expect(reason == "element")

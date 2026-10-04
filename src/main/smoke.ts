@@ -9,7 +9,7 @@ import { decodeWav } from '@shared/wav'
 import { wordErrorRate } from '@shared/wer'
 import type { HelperBridge } from './native/helper-bridge'
 import { DEFAULT_MODEL } from './stt/model-catalog'
-import { isModelReady, modelDir } from './stt/model-store'
+import { adoptModel, modelDir } from './stt/model-store'
 import { modelsRoot } from './stt/models-dir'
 import type { SttHost } from './stt/stt-host'
 import { loadRenderer } from './windows/load-renderer'
@@ -117,7 +117,7 @@ export async function runSmoke({ helper, stt, overlay }: SmokeParts): Promise<Sm
     }),
   )
 
-  const modelReady = await isModelReady(modelsRoot(), DEFAULT_MODEL)
+  const modelReady = (await adoptModel(modelsRoot(), DEFAULT_MODEL)).ready
   let modelLoaded = false
   checks.push(
     await check('speech model loads in the worker', async () => {

@@ -53,6 +53,56 @@ describe('RecoveryBuffer', () => {
     expect(buffer.lastWithText()?.finalText).toBe('final 1')
   })
 
+  it('keeps the text of an earlier attempt when a later one ends with none', () => {
+    const buffer = new RecoveryBuffer()
+    buffer.record(entry(1, { outcome: 'cancelled', cleanupNote: 'rules' }))
+    buffer.record(entry(1, { outcome: 'failed', endedAt: 9_000, rawText: null, finalText: null }))
+
+    expect(buffer.list()).toEqual([
+      {
+        sessionId: 1,
+        endedAt: 9_000,
+        outcome: 'failed',
+        rawText: 'raw 1',
+        finalText: 'final 1',
+        cleanupNote: 'rules',
+      },
+    ])
+  })
+
+  it('takes the text of a later attempt over that of an earlier one', () => {
+    const buffer = new RecoveryBuffer()
+    buffer.record(entry(1, { outcome: 'cancelled' }))
+    buffer.record(entry(1, { outcome: 'pasted', rawText: 'raw again', finalText: 'final again' }))
+
+    expect(buffer.lastWithText()).toMatchObject({ outcome: 'pasted', finalText: 'final again' })
+  })
+
+  it('fills in text that arrives late, for a session that has none', () => {
+    const buffer = new RecoveryBuffer()
+    buffer.record(entry(1, { outcome: 'cancelled', rawText: null, finalText: null }))
+
+    buffer.fill(1, { rawText: 'raw late', finalText: 'final late' })
+
+    expect(buffer.lastWithText()).toMatchObject({
+      sessionId: 1,
+      outcome: 'cancelled',
+      rawText: 'raw late',
+      finalText: 'final late',
+    })
+  })
+
+  it('does not let late text replace text the session already has, or invent a session', () => {
+    const buffer = new RecoveryBuffer()
+    buffer.record(entry(1))
+
+    buffer.fill(1, { rawText: 'raw late', finalText: 'final late' })
+    buffer.fill(2, { rawText: 'raw late', finalText: 'final late' })
+
+    expect(buffer.list()).toHaveLength(1)
+    expect(buffer.lastWithText()?.finalText).toBe('final 1')
+  })
+
   it('drops the oldest session once it is full', () => {
     const buffer = new RecoveryBuffer(3)
     for (const id of [1, 2, 3, 4]) buffer.record(entry(id))

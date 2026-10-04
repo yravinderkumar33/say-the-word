@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import type { LocalVerdict } from '../../src/main/cleanup/local-only'
+import { LocalOnlyGate, type LocalVerdict } from '../../src/main/cleanup/local-only'
 import {
+  OllamaClient,
   OllamaError,
   type ChatRequest,
   type ChatResult,
+  type WarmReply,
 } from '../../src/main/cleanup/ollama-client'
 import { PROMPT_PREFIX, buildMessages, relevantVocabulary } from '../../src/main/cleanup/prompts'
 import { Refiner } from '../../src/main/cleanup/refiner'
@@ -21,49 +23,94 @@ const reply = (content: string, extra: Partial<ChatResult> = {}): ChatResult => 
   ...extra,
 })
 
-function setup(options: { ceilingMs?: number; dictionary?: DictionaryEntry[] } = {}) {
+function setup(
+  options: {
+    ceilingMs?: number
+    dictionary?: DictionaryEntry[]
+    /** Time passes as it really does, instead of standing still until a test moves it. */
+    realClock?: boolean
+    warmTimeoutMs?: number
+  } = {},
+) {
   const state = {
     model: 'qwen3.5:4b' as string | null,
-    verdict: { local: true } as LocalVerdict,
+    verdict: null as LocalVerdict | null,
+    digest: 'first-digest',
     /** What the model answers, or how it fails. */
     answer: ((request: ChatRequest) =>
       Promise.resolve(reply(String(request.messages.at(-1)?.content)))) as (
       request: ChatRequest,
     ) => Promise<ChatResult>,
     clock: 0,
+    url: 'http://127.0.0.1:11434',
+    /** What the warm-up's reply says, or null when there is none. */
+    warm: ((_signal?: AbortSignal) => Promise.resolve(LOCAL)) as (
+      signal?: AbortSignal,
+    ) => Promise<WarmReply | null>,
+    /** How long the gate takes to answer, one entry per question; then at once. */
+    checkTakesMs: [] as number[],
   }
   const calls = {
     chat: [] as ChatRequest[],
     checked: [] as string[],
     blocked: [] as string[],
     warmed: 0,
+    warmedModels: [] as string[],
+    warmSignals: [] as Array<AbortSignal | undefined>,
+    redirects: 0,
+    /** What the model was sent, in order: `warm` (instructions only) or `chat` (a transcript). */
+    sent: [] as string[],
   }
   const refiner = new Refiner({
     client: {
+      get url() {
+        return state.url
+      },
       chat: (request) => {
         calls.chat.push(request)
+        calls.sent.push('chat')
         return state.answer(request)
       },
-      warm: () => {
+      warm: (model, _prefix, signal) => {
         calls.warmed += 1
-        return Promise.resolve()
+        calls.warmedModels.push(model)
+        calls.warmSignals.push(signal)
+        calls.sent.push('warm')
+        return state.warm(signal)
       },
     },
     gate: {
-      check: (model) => {
+      // As the real gate does: a blocked model is refused from then on.
+      check: async (model) => {
         calls.checked.push(model)
-        return Promise.resolve(state.verdict)
+        const takes = state.checkTakesMs.shift() ?? 0
+        if (takes > 0) await new Promise((resolve) => setTimeout(resolve, takes))
+        return calls.blocked.includes(model)
+          ? ({ local: false, reason: 'blocked' } as const)
+          : (state.verdict ?? {
+              local: true,
+              identity: {
+                server: state.url,
+                model: model.includes(':') ? model : `${model}:latest`,
+                digest: state.digest,
+              },
+            })
       },
       block: (model) => void calls.blocked.push(model),
+      sawRedirect: () => void (calls.redirects += 1),
     },
     model: () => state.model,
     dictionary: () => options.dictionary ?? [],
-    now: () => state.clock,
+    now: () => (options.realClock ? performance.now() : state.clock),
     ...(options.ceilingMs ? { ceilingMs: options.ceilingMs } : {}),
+    ...(options.warmTimeoutMs ? { warmTimeoutMs: options.warmTimeoutMs } : {}),
   })
   const run = (raw: string, signal = new AbortController().signal) => refiner.refine(raw, signal)
   return { refiner, state, calls, run }
 }
+
+const LOCAL: WarmReply = { remote: false, redirected: false }
+const REMOTE: WarmReply = { remote: true, redirected: false }
 
 const answers =
   (content: string, extra: Partial<ChatResult> = {}) =>
@@ -227,6 +274,15 @@ describe('Refiner', () => {
     expect(await t.run(SPOKEN)).toMatchObject({ note, cleaned: null })
   })
 
+  it('takes a redirect for a server that is not to be used, and says so', async () => {
+    const t = setup()
+    t.state.answer = () =>
+      Promise.reject(new OllamaError('redirect', 'Ollama answered with a redirect'))
+
+    expect(await t.run(SPOKEN)).toMatchObject({ note: 'notLocal:redirected', cleaned: null })
+    expect(t.calls.redirects).toBe(1)
+  })
+
   it('reports a cancelled session as cancelled, not as a failure', async () => {
     const t = setup()
     const cancel = new AbortController()
@@ -248,7 +304,8 @@ describe('Refiner', () => {
       t.refiner.prewarm()
       await settle()
 
-      expect(t.calls.checked).toEqual(['qwen3.5:4b'])
+      // Resolve the current digest even when an earlier reply is still cached.
+      expect(t.calls.checked).toEqual(['qwen3.5:4b', 'qwen3.5:4b', 'qwen3.5:4b'])
       expect(t.calls.warmed).toBe(1)
 
       t.state.clock += 6 * 60_000
@@ -268,6 +325,468 @@ describe('Refiner', () => {
 
       expect(t.calls.warmed).toBe(0)
     })
+
+    it('blocks a model whose warm-up reply came from another machine', async () => {
+      const t = setup()
+      t.state.warm = () => Promise.resolve(REMOTE)
+      t.state.answer = answers(CLEAN)
+
+      t.refiner.prewarm()
+      await settle()
+      const result = await t.run(SPOKEN)
+
+      expect(t.calls.blocked).toEqual(['qwen3.5:4b'])
+      expect(result).toMatchObject({ note: 'notLocal:blocked', cleaned: null })
+      expect(t.calls.chat).toEqual([])
+    })
+
+    it('does not send the transcript to a server that redirected the warm-up', async () => {
+      const t = setup()
+      t.state.warm = () => Promise.resolve({ remote: false, redirected: true })
+      // As the real gate does once it has been told.
+      t.state.answer = answers(CLEAN)
+
+      t.refiner.prewarm()
+      await settle()
+
+      expect(t.calls.redirects).toBe(1)
+      expect(t.calls.blocked).toEqual([])
+      // Not warm: the next dictation asks again, in case the address has been put right.
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(2)
+    })
+
+    it('holds the transcript back until a warm-up on its way has answered', async () => {
+      const t = setup()
+      let answer!: (reply: WarmReply) => void
+      t.state.warm = () => new Promise((resolve) => (answer = resolve))
+      t.state.answer = answers(CLEAN)
+
+      t.refiner.prewarm()
+      await settle()
+      const result = t.run(SPOKEN)
+      await settle()
+      // The dictation is over and its text is ready, but nobody knows yet where the
+      // model runs.
+      expect(t.calls.chat).toEqual([])
+
+      answer(REMOTE)
+
+      expect(await result).toMatchObject({ note: 'notLocal:blocked', cleaned: null })
+      expect(t.calls.chat).toEqual([])
+    })
+
+    it('sends the transcript once the warm-up has shown the model to be local', async () => {
+      const t = setup()
+      let answer!: (reply: WarmReply) => void
+      t.state.warm = () => new Promise((resolve) => (answer = resolve))
+      t.state.answer = answers(CLEAN)
+
+      t.refiner.prewarm()
+      await settle()
+      const result = t.run(SPOKEN)
+      await settle()
+      answer(LOCAL)
+
+      expect(await result).toMatchObject({ note: 'cleaned', final: CLEAN })
+      expect(t.calls.chat).toHaveLength(1)
+    })
+
+    it('waits for a warm-up no longer than cleanup may take, and then sends nothing', async () => {
+      const t = setup({ ceilingMs: 2_500 })
+      t.state.clock = performance.now()
+      // A server that took the warm-up and never answered it.
+      t.state.warm = () => new Promise(() => {})
+      t.state.answer = answers(CLEAN)
+      t.refiner.prewarm()
+      await settle()
+
+      const started = performance.now()
+      const result = await t.run('send the report to the team today please')
+
+      expect(result).toMatchObject({ note: 'timeout', cleaned: null })
+      expect(t.calls.chat).toEqual([])
+      expect(performance.now() - started).toBeLessThan(2_600)
+    })
+
+    it('does not wait when the session is cancelled meanwhile', async () => {
+      const t = setup()
+      t.state.warm = () => new Promise(() => {})
+      const cancel = new AbortController()
+      t.refiner.prewarm()
+      await settle()
+
+      const result = t.run(SPOKEN, cancel.signal)
+      await settle()
+      cancel.abort()
+
+      expect((await result).note).toBe('cancelled')
+      expect(t.calls.chat).toEqual([])
+    })
+
+    it("starts a fresh warm-up when a cancelled session's request has not settled yet", async () => {
+      const t = setup()
+      let finishCancelled!: (reply: WarmReply | null) => void
+      t.state.warm = () => new Promise((resolve) => (finishCancelled = resolve))
+      const cancel = new AbortController()
+      const first = t.run(SPOKEN, cancel.signal)
+      await settle()
+      cancel.abort()
+      expect((await first).note).toBe('cancelled')
+
+      t.state.warm = () => Promise.resolve(LOCAL)
+      t.state.answer = answers(CLEAN)
+      expect((await t.run(SPOKEN)).note).toBe('cleaned')
+      expect(t.calls.sent).toEqual(['warm', 'warm', 'chat'])
+      finishCancelled(null)
+      await settle()
+    })
+
+    it('does not wait for the warm-up of another model, and asks the chosen one itself', async () => {
+      const t = setup()
+      // The model chosen first never answers its warm-up; the one chosen after does.
+      t.state.warm = () => (t.calls.warmed === 1 ? new Promise(() => {}) : Promise.resolve(LOCAL))
+      t.state.answer = answers(CLEAN)
+      t.refiner.prewarm()
+      await settle()
+
+      t.state.model = 'gemma4:e4b'
+
+      expect((await t.run(SPOKEN)).note).toBe('cleaned')
+      expect(t.calls.warmedModels).toEqual(['qwen3.5:4b', 'gemma4:e4b'])
+    })
+
+    it('warms again when the model or the server is another one', async () => {
+      const t = setup()
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(1)
+
+      t.state.model = 'gemma4:e4b'
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(2)
+
+      t.state.url = 'http://127.0.0.1:11500'
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(3)
+
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(3)
+    })
+
+    it("does not give a replacement digest the previous digest's warm approval", async () => {
+      const t = setup()
+      t.refiner.prewarm()
+      await settle()
+      t.state.digest = 'replacement-digest'
+      t.state.warm = () => Promise.resolve(REMOTE)
+
+      expect((await t.run(SPOKEN)).note).toBe('notLocal:blocked')
+      expect(t.calls.warmed).toBe(2)
+      expect(t.calls.chat).toEqual([])
+    })
+
+    it('warms a local replacement before sending it a transcript', async () => {
+      const t = setup()
+      t.state.answer = answers(CLEAN)
+      t.refiner.prewarm()
+      await settle()
+      t.state.digest = 'replacement-digest'
+
+      expect((await t.run(SPOKEN)).note).toBe('cleaned')
+      expect(t.calls.sent).toEqual(['warm', 'warm', 'chat'])
+    })
+
+    it('shares warm evidence for tagged and untagged names of the same identity', async () => {
+      const t = setup()
+      t.state.model = 'gemma'
+      t.state.answer = answers(CLEAN)
+      t.refiner.prewarm()
+      await settle()
+      t.state.model = 'gemma:latest'
+
+      expect((await t.run(SPOKEN)).note).toBe('cleaned')
+      expect(t.calls.warmedModels).toEqual(['gemma:latest'])
+      expect(t.calls.chat[0]?.model).toBe('gemma:latest')
+    })
+
+    it("does not join an old digest's in-flight warm-up for its replacement", async () => {
+      const t = setup()
+      let finishOriginal!: (reply: WarmReply) => void
+      t.state.warm = () => new Promise((resolve) => (finishOriginal = resolve))
+      t.refiner.prewarm()
+      await settle()
+      t.state.digest = 'replacement-digest'
+      t.state.warm = () => Promise.resolve(REMOTE)
+
+      expect((await t.run(SPOKEN)).note).toBe('notLocal:blocked')
+      expect(t.calls.warmed).toBe(2)
+      expect(t.calls.chat).toEqual([])
+      finishOriginal(LOCAL)
+      await settle()
+    })
+
+    it('rechecks a replacement made while the first warm-up was answering', async () => {
+      const t = setup()
+      t.state.warm = () => {
+        if (t.calls.warmed > 1) return Promise.resolve(REMOTE)
+        t.state.digest = 'replacement-digest'
+        return Promise.resolve(LOCAL)
+      }
+
+      expect((await t.run(SPOKEN)).note).toBe('notLocal:blocked')
+      expect(t.calls.sent).toEqual(['warm', 'warm'])
+    })
+
+    it('does not let a late prewarm approve another digest or another server', async () => {
+      for (const changed of ['digest', 'server'] as const) {
+        const t = setup()
+        let finishOriginal!: (reply: WarmReply) => void
+        t.state.warm = () => new Promise((resolve) => (finishOriginal = resolve))
+        t.refiner.prewarm()
+        await settle()
+        if (changed === 'digest') t.state.digest = 'replacement-digest'
+        else t.state.url = 'http://127.0.0.1:11500'
+        finishOriginal(LOCAL)
+        await settle()
+        t.state.warm = () => Promise.resolve(REMOTE)
+
+        expect((await t.run(SPOKEN)).note).toBe('notLocal:blocked')
+        expect(t.calls.sent).toEqual(['warm', 'warm'])
+      }
+    })
+
+    it('falls back after repeated identity changes without sending a transcript', async () => {
+      const t = setup()
+      t.state.warm = () => {
+        t.state.digest = `replacement-${t.calls.warmed}`
+        return Promise.resolve(LOCAL)
+      }
+
+      expect(await t.run(SPOKEN)).toMatchObject({ note: 'failed', cleaned: null })
+      expect(t.calls.warmed).toBe(3)
+      expect(t.calls.chat).toEqual([])
+    })
+
+    it('tries again at the next dictation when a warm-up got no reply', async () => {
+      const t = setup()
+      t.state.warm = () => Promise.resolve(null)
+      t.refiner.prewarm()
+      await settle()
+
+      t.refiner.prewarm()
+      await settle()
+
+      expect(t.calls.warmed).toBe(2)
+      expect(t.calls.blocked).toEqual([])
+    })
+
+    it('gives up on a warm-up that is never answered, and is then free to try again', async () => {
+      const t = setup({ warmTimeoutMs: 60 })
+      // A server that takes the request and says nothing, until the request is ended.
+      t.state.warm = (signal) =>
+        new Promise((resolve) => signal?.addEventListener('abort', () => resolve(null)))
+
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmSignals[0]?.aborted).toBe(false)
+      // While it is on its way, a second dictation does not start another.
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(1)
+
+      await new Promise((resolve) => setTimeout(resolve, 120))
+
+      expect(t.calls.warmSignals[0]?.aborted).toBe(true)
+      t.refiner.prewarm()
+      await settle()
+      expect(t.calls.warmed).toBe(2)
+    })
+  })
+
+  describe('the first thing a model is sent', () => {
+    const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+    it('is never the transcript: with no warm-up before it, one is made first', async () => {
+      const t = setup()
+      t.state.answer = answers(CLEAN)
+
+      // An Undo long after the dictation, say: nothing warmed the model up.
+      expect((await t.run(SPOKEN)).note).toBe('cleaned')
+
+      expect(t.calls.sent).toEqual(['warm', 'chat'])
+    })
+
+    it('is not followed by the transcript when the first reply names another machine', async () => {
+      const t = setup()
+      t.state.warm = () => Promise.resolve(REMOTE)
+      t.state.answer = answers(CLEAN)
+
+      expect(await t.run(SPOKEN)).toMatchObject({ note: 'notLocal:blocked', cleaned: null })
+
+      expect(t.calls.sent).toEqual(['warm'])
+      expect(t.calls.blocked).toEqual(['qwen3.5:4b'])
+    })
+
+    it('is asked for again for a model chosen while the dictation was going on', async () => {
+      const t = setup()
+      t.state.answer = answers(CLEAN)
+      t.refiner.prewarm()
+      await settle()
+      // The other model is picked in the menu before the key is released, and its
+      // first reply names another machine.
+      t.state.model = 'looks-local:latest'
+      t.state.warm = () => Promise.resolve(REMOTE)
+
+      expect((await t.run(SPOKEN)).note).toBe('notLocal:blocked')
+
+      expect(t.calls.warmedModels).toEqual(['qwen3.5:4b', 'looks-local:latest'])
+      expect(t.calls.chat).toEqual([])
+    })
+
+    it('is not followed by the transcript when it never came', async () => {
+      const t = setup()
+      // The model is listed as local, and every request to it fails.
+      t.state.warm = () => Promise.resolve(null)
+      t.state.answer = answers(CLEAN)
+      t.refiner.prewarm()
+      await settle()
+
+      expect(await t.run(SPOKEN)).toMatchObject({ note: 'failed', cleaned: null })
+
+      // Asked a second time when the text was ready, and still no transcript sent.
+      expect(t.calls.sent).toEqual(['warm', 'warm'])
+    })
+
+    it('need not be asked for again while the model is in use', async () => {
+      const t = setup()
+      t.state.answer = answers(CLEAN)
+      await t.run(SPOKEN)
+      // Four minutes later the model answers a dictation; four minutes after that,
+      // another. The last warm-up is eight minutes old, the last reply four.
+      t.state.clock += 4 * 60_000
+      await t.run(SPOKEN)
+      t.state.clock += 4 * 60_000
+      t.refiner.prewarm()
+      await t.run(SPOKEN)
+
+      expect(t.calls.sent).toEqual(['warm', 'chat', 'chat', 'chat'])
+    })
+  })
+
+  describe('the time cleanup may take', () => {
+    const SHORT_ENOUGH = 'send the report to the team today please'
+
+    it('covers the wait for a warm-up and the question that follows it', async () => {
+      const t = setup({ ceilingMs: 1_200, realClock: true })
+      t.state.answer = answers(CLEAN)
+      // The warm-up answers just inside the time there is, and the gate is then slow
+      // to say whether the model may be used.
+      t.state.warm = () => new Promise((resolve) => setTimeout(() => resolve(LOCAL), 900))
+      t.state.checkTakesMs = [0, 900]
+
+      const started = performance.now()
+      const result = await t.run(SHORT_ENOUGH)
+      const took = performance.now() - started
+
+      expect(result).toMatchObject({ note: 'timeout', cleaned: null })
+      expect(t.calls.chat).toEqual([])
+      // The rules-only text is on time: 1.2 s, not 0.9 s and then another 0.9 s.
+      expect(took).toBeLessThan(1_400)
+      expect(result.cleanupMs).toBeLessThan(1_400)
+    })
+
+    it('is not overrun by a gate that is slow to answer', async () => {
+      const t = setup({ ceilingMs: 1_200, realClock: true })
+      t.state.answer = answers(CLEAN)
+      await t.run(SHORT_ENOUGH)
+      // The model has answered before; this time the gate takes two seconds.
+      t.state.checkTakesMs = [2_000]
+
+      const started = performance.now()
+      const result = await t.run(SHORT_ENOUGH)
+
+      expect(result.note).toBe('timeout')
+      expect(performance.now() - started).toBeLessThan(1_400)
+    })
+
+    it('does not reset the cleanup deadline when the model is replaced during warm-up', async () => {
+      const t = setup({ ceilingMs: 1_200, realClock: true })
+      t.state.warm = (signal) =>
+        new Promise((resolve) => {
+          if (t.calls.warmed === 1) {
+            setTimeout(() => {
+              t.state.digest = 'replacement-digest'
+              resolve(LOCAL)
+            }, 900)
+          } else {
+            signal?.addEventListener('abort', () => resolve(null))
+          }
+        })
+
+      const started = performance.now()
+      expect((await t.run(SHORT_ENOUGH)).note).toBe('timeout')
+      expect(performance.now() - started).toBeLessThan(1_400)
+      expect(t.calls.warmed).toBe(2)
+      expect(t.calls.chat).toEqual([])
+      expect(t.calls.warmSignals[1]?.aborted).toBe(true)
+    })
+  })
+})
+
+describe('Cleaned mode against a model that only its own reply gives away', () => {
+  const TRANSCRIPT = 'Please bring the report to the meeting today'
+
+  /** Lists and details that say "local", and a reply that names another machine. */
+  function setupServer() {
+    const seen = { chats: 0, transcripts: 0 }
+    const json = (body: unknown): Response =>
+      new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+    const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
+      const path = String(input)
+      if (path.endsWith('/api/tags')) {
+        return Promise.resolve(json({ models: [{ name: 'looks-local:latest', digest: 'd1' }] }))
+      }
+      if (path.endsWith('/api/show')) return Promise.resolve(json({ capabilities: ['completion'] }))
+      seen.chats += 1
+      if (String(init?.body).includes(TRANSCRIPT)) seen.transcripts += 1
+      return Promise.resolve(
+        new Response(
+          `${JSON.stringify({
+            done: true,
+            done_reason: 'stop',
+            remote_host: 'remote.test',
+            message: { content: 'ok' },
+          })}\n`,
+        ),
+      )
+    }) as typeof fetch
+    const client = new OllamaClient(undefined, fetchImpl)
+    const gate = new LocalOnlyGate(client)
+    const refiner = new Refiner({
+      client,
+      gate,
+      model: () => 'looks-local',
+      dictionary: () => [],
+    })
+    return { seen, gate, refiner }
+  }
+
+  it('sends no transcript once the warm-up reply has named another machine', async () => {
+    const t = setupServer()
+    expect((await t.gate.check('looks-local')).local).toBe(true)
+
+    t.refiner.prewarm()
+    const refined = await t.refiner.refine(TRANSCRIPT, new AbortController().signal)
+
+    expect(t.seen.chats).toBe(1)
+    expect(t.seen.transcripts).toBe(0)
+    expect(refined).toMatchObject({ note: 'notLocal:blocked', cleaned: null, final: TRANSCRIPT })
+    expect(await t.gate.check('looks-local')).toEqual({ local: false, reason: 'blocked' })
   })
 })
 

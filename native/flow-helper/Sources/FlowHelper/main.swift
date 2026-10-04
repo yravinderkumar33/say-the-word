@@ -20,7 +20,9 @@ if arguments.first == "--version" {
     exit(0)
 }
 
-if let tool = arguments.first, ["--post-keys", "--census", "--focused-value"].contains(tool) {
+if let tool = arguments.first,
+   ["--post-keys", "--census", "--focused-value", "--slow-clipboard"].contains(tool)
+{
     guard TestTools.isEnabled else {
         FileHandle.standardError.write(Data("test tools are disabled (set FLOW_HELPER_TEST_TOOLS=1)\n".utf8))
         exit(64)
@@ -30,6 +32,8 @@ if let tool = arguments.first, ["--post-keys", "--census", "--focused-value"].co
         exit(TestTools.postKeys(arguments.dropFirst().first ?? ""))
     case "--focused-value":
         exit(TestTools.focusedValue())
+    case "--slow-clipboard":
+        exit(TestTools.slowClipboard(milliseconds: arguments.dropFirst().first.flatMap { Int($0) } ?? 1_500))
     default:
         exit(TestTools.census(seconds: arguments.dropFirst().first.flatMap { Int($0) } ?? 20))
     }
@@ -72,7 +76,13 @@ let watch = Timer(timeInterval: 1, repeats: true) { _ in
     if tap.isInstalled, AXIsProcessTrusted() == false {
         tap.uninstall(reason: "accessibilityRevoked")
     }
-    targets.secureInput.sample()
+    let inFront = NSWorkspace.shared.frontmostApplication
+    targets.secureInput.sample(
+        frontmost: inFront?.processIdentifier,
+        // With the fallback: the lock screen or the screen saver must be known for what
+        // it is even when Launch Services has no answer about it.
+        bundleId: inFront.flatMap { TargetStore.bundleId(of: $0) }
+    )
 }
 RunLoop.main.add(watch, forMode: .common)
 

@@ -31,15 +31,37 @@ export class RecoveryBuffer {
 
   constructor(private readonly capacity = 20) {}
 
-  /** Adds a session, or replaces the entry of the same session. */
+  /**
+   * Adds a session, or replaces the entry of the same session.
+   *
+   * Undo and Retry run a session again under its id. An attempt that ends with no text
+   * (it failed, or was cancelled in turn) says how the session ended, but does not take
+   * away the text an earlier attempt left: that text is still the user's words.
+   */
   record(entry: RecoveryEntry): void {
     const existing = this.entries.findIndex((item) => item.sessionId === entry.sessionId)
-    if (existing !== -1) {
-      this.entries[existing] = entry
+    if (existing === -1) {
+      this.entries.push(entry)
+      if (this.entries.length > this.capacity) this.entries.shift()
       return
     }
-    this.entries.push(entry)
-    if (this.entries.length > this.capacity) this.entries.shift()
+    const before = this.entries[existing]
+    this.entries[existing] =
+      !entry.finalText && before?.finalText
+        ? { ...before, endedAt: entry.endedAt, outcome: entry.outcome }
+        : entry
+  }
+
+  /**
+   * Text that arrived after its session was over (it was cancelled while the text was
+   * still being worked out). Kept only if the session has none: by now an Undo may
+   * have produced, and pasted, a newer one.
+   */
+  fill(sessionId: number, text: Omit<RecoveryEntry, 'sessionId' | 'endedAt' | 'outcome'>): void {
+    const existing = this.entries.findIndex((item) => item.sessionId === sessionId)
+    const before = this.entries[existing]
+    if (!before || before.finalText) return
+    this.entries[existing] = { ...before, ...text }
   }
 
   /** The most recent session that produced text, whatever its outcome. */

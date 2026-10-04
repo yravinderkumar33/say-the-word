@@ -1,4 +1,6 @@
 import Carbon.HIToolbox
+import CoreGraphics
+import FlowHelperCore
 import Foundation
 import IOKit
 
@@ -8,8 +10,9 @@ enum SecureInput {
         IsSecureEventInputEnabled()
     }
 
-    /// The process that switched Secure Event Input on, from the I/O Registry, or nil
-    /// when it is off or cannot be read.
+    /// The process the system names for Secure Event Input, from the I/O Registry, or
+    /// nil when it is off or cannot be read. That is the app that was in front when it
+    /// was switched on, which need not be the process that switched it on.
     static func holderPid() -> pid_t? {
         let root = IORegistryGetRootEntry(kIOMainPortDefault)
         defer { IOObjectRelease(root) }
@@ -28,30 +31,40 @@ enum SecureInput {
     }
 }
 
-/// Follows Secure Event Input over time, so that one left switched on (see
-/// `SecureFieldPolicy`) can be told from one a password field has just switched on.
-/// Sampled once a second and at every capture. Main thread only.
+/// Samples Secure Event Input, retaining diagnostic history about possibly stale
+/// holds. History cannot establish whether the current field is safe. Read once a
+/// second and at every capture. Main thread only.
 final class SecureInputWatch {
-    private var holder: pid_t?
-    private var since: Date?
+    private var history = SecureInputHistory()
 
-    func sample(now: Date = Date()) {
-        guard SecureInput.isEnabled else {
-            holder = nil
-            since = nil
-            return
-        }
-        let current = SecureInput.holderPid()
-        if since == nil || current != holder {
-            holder = current
-            since = now
-        }
+    /// Takes a reading, given the app in front. Returns the holder and whether earlier
+    /// samples saw it holding in the background, or nil while Secure Event Input is off.
+    @discardableResult
+    func sample(frontmost: pid_t?, bundleId: String?) -> (holder: pid_t?, leftOn: Bool)? {
+        let enabled = SecureInput.isEnabled
+        let holder = enabled ? SecureInput.holderPid() : nil
+        // Who is in front only matters while there is a hold to judge.
+        let witness = enabled
+            ? SecureInputHistory.witness(
+                frontmostPid: frontmost, bundleId: bundleId, sessionAway: Self.sessionIsAway
+            )
+            : nil
+        history.observe(
+            enabled: enabled,
+            holder: holder,
+            frontmost: witness,
+            // Stands still while the Mac sleeps, so a nap is never taken for proof.
+            at: ProcessInfo.processInfo.systemUptime
+        )
+        return enabled ? (holder, history.leftOn) : nil
     }
 
-    /// The holder and how long it has held Secure Event Input, or nil while it is off.
-    func state(now: Date = Date()) -> (holder: pid_t?, heldFor: TimeInterval)? {
-        sample(now: now)
-        guard let since else { return nil }
-        return (holder, now.timeIntervalSince(since))
+    /// True while nobody can be using an app: the screen is locked, or another user has
+    /// the console. If the session cannot be read, it is taken to be away.
+    private static var sessionIsAway: Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return true }
+        if (session["CGSSessionScreenIsLocked"] as? Bool) == true { return true }
+        if (session[kCGSessionOnConsoleKey as String] as? Bool) == false { return true }
+        return false
     }
 }

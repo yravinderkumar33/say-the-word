@@ -33,4 +33,10 @@ export interface HubBridge {
   requestMicrophone(): Promise<void>
   /** Starts downloading the speech model; progress appears in the status. */
   downloadModel(): Promise<void>
+  /** Stops the download. What has arrived is kept, and the next download resumes from it. */
+  cancelDownload(): Promise<void>
+  /** Checks the model's files, fetches any that are damaged, and loads the model again. */
+  repairModel(): Promise<void>
+  /** Switches "Save every dictation" off. Switching it on is done in the menu only. */
+  stopSavingDictations(): Promise<void>
 }

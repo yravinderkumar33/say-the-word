@@ -4,23 +4,25 @@
 /// There are two signals. The accessibility role is exact, but Chromium-based apps
 /// (browsers, Electron apps) expose no focused element until something wakes their
 /// accessibility tree. Those apps do switch on macOS Secure Event Input while a
-/// password field has focus, so that is the second signal: Secure Event Input held by
-/// the frontmost app itself.
+/// password field has focus, so that is the second signal: Secure Event Input for which
+/// the system names the frontmost app.
+///
+/// The app the system names is the one that was in front when Secure Event Input was
+/// switched on, whichever process switched it on, and the name stays while the hold
+/// lasts (checked on 2026-10-04 with a background process and two apps). So a name
+/// that is not the frontmost app's says nothing about the field in front.
 ///
 /// Terminals are exempt from the second signal, because they hold Secure Event Input
 /// for ordinary typing ("Secure Keyboard Entry") and have no password fields of the
 /// web kind.
 ///
-/// The second signal only counts while it is fresh. A password field holds Secure Event
-/// Input for as long as someone is typing a password. macOS 26.5 has been reported to
-/// leave it switched on after the lock screen, naming whichever app was in front, and
-/// it then stays on until logout: taken at its word, that would refuse every dictation
-/// into that app. Secure Event Input that has been on for longer than a password takes
-/// to type is therefore treated as stuck, and ignored.
+/// Historical evidence that Secure Event Input was left on cannot establish whether
+/// the current field is safe. A later password field, or a disable/re-enable entirely
+/// between samples, can have the same holder. Apart from the terminal exception, the
+/// current signal therefore always refuses automatic paste, however long the hold has
+/// lasted. The text is offered for copying instead, including for an ordinary field
+/// whose app has left Secure Event Input on. History is diagnostic only.
 public enum SecureFieldPolicy {
-    /// How long Secure Event Input may have been on and still mean "a password field".
-    public static let freshFor: Double = 60
-
     public static let terminalBundleIds: Set<String> = [
         "com.apple.Terminal",
         "com.googlecode.iterm2",
@@ -36,7 +38,7 @@ public enum SecureFieldPolicy {
         elementIsSecure: Bool,
         secureInputEnabled: Bool,
         secureInputHolderPid: Int32?,
-        secureInputHeldFor: Double = 0,
+        secureInputLeftOn: Bool = false,
         frontmostPid: Int32,
         bundleId: String?
     ) -> Bool {
@@ -44,31 +46,33 @@ public enum SecureFieldPolicy {
             elementIsSecure: elementIsSecure,
             secureInputEnabled: secureInputEnabled,
             secureInputHolderPid: secureInputHolderPid,
-            secureInputHeldFor: secureInputHeldFor,
+            secureInputLeftOn: secureInputLeftOn,
             frontmostPid: frontmostPid,
             bundleId: bundleId
         ) != nil
     }
 
-    /// True when the frontmost app holds Secure Event Input and has done for too long to
-    /// be a password being typed. Reported so the log can say why the signal was ignored.
+    /// True when the frontmost app holds Secure Event Input and an earlier reading
+    /// saw that holder in the background. Diagnostic only: this does not establish
+    /// whether the current hold is the same one or whether the current field is safe.
     public static func isStuck(
         secureInputEnabled: Bool,
         secureInputHolderPid: Int32?,
-        secureInputHeldFor: Double,
+        secureInputLeftOn: Bool,
         frontmostPid: Int32
     ) -> Bool {
-        secureInputEnabled && secureInputHolderPid == frontmostPid && secureInputHeldFor > freshFor
+        secureInputEnabled && secureInputHolderPid == frontmostPid && secureInputLeftOn
     }
 
     /// Which signal marked the field as a password field: `element` (its accessibility
     /// role) or `secureInput` (Secure Event Input held by the frontmost app). Nil when
     /// it is not one. This is what the log shows when a paste is refused for it.
+    /// `secureInputLeftOn` is diagnostic context and never relaxes this decision.
     public static func reason(
         elementIsSecure: Bool,
         secureInputEnabled: Bool,
         secureInputHolderPid: Int32?,
-        secureInputHeldFor: Double = 0,
+        secureInputLeftOn _: Bool = false,
         frontmostPid: Int32,
         bundleId: String?
     ) -> String? {
@@ -79,7 +83,6 @@ public enum SecureFieldPolicy {
             return nil
         }
         if let bundleId, terminalBundleIds.contains(bundleId) { return nil }
-        if secureInputHeldFor > freshFor { return nil }
         return "secureInput"
     }
 }

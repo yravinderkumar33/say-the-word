@@ -8,6 +8,7 @@ final class FakeActions: HelperActions {
         let text: String
         let targetId: Int?
         let restoreDelayMs: Int
+        var expiresAtMs: Double?
     }
 
     var configured: [[Binding]] = []
@@ -35,8 +36,16 @@ final class FakeActions: HelperActions {
         return ["targetId": 41, "secure": false]
     }
 
-    func paste(pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int) -> [String: Any] {
-        pastes.append(Paste(pasteId: pasteId, text: text, targetId: targetId, restoreDelayMs: restoreDelayMs))
+    func paste(
+        pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int, expiresAtMs: Double?
+    ) -> [String: Any] {
+        pastes.append(Paste(
+            pasteId: pasteId,
+            text: text,
+            targetId: targetId,
+            restoreDelayMs: restoreDelayMs,
+            expiresAtMs: expiresAtMs
+        ))
         return ["outcome": "pasted"]
     }
 
@@ -169,6 +178,19 @@ struct DispatcherTests {
         #expect(actions.pastes == [FakeActions.Paste(pasteId: 9, text: "Hello.", targetId: nil, restoreDelayMs: 500)])
     }
 
+    @Test func pastePassesOnWhenTheAppStopsWaiting() throws {
+        _ = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":1791100000123}"#)
+
+        #expect(actions.pastes.first?.expiresAtMs == 1_791_100_000_123)
+    }
+
+    @Test func pasteWithoutAnExpiryHasNone() throws {
+        _ = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":null}"#)
+
+        #expect(actions.pastes.count == 1)
+        #expect(actions.pastes.first?.expiresAtMs == nil)
+    }
+
     @Test func pasteKeepsNewlinesAndUnicodeIntact() throws {
         _ = try reply(#"{"id":3,"type":"paste","pasteId":1,"text":"Line one\nLine two — café 你好"}"#)
 
@@ -184,6 +206,8 @@ struct DispatcherTests {
         #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":"41"}"#,
         #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","restoreDelayMs":-1}"#,
         #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","restoreDelayMs":999999}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":"soon"}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":true}"#,
     ])
     func pasteRejectsMalformedRequestsWithoutPasting(line: String) throws {
         let object = try reply(line)

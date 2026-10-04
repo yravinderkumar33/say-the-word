@@ -8,14 +8,6 @@ import Foundation
 ///
 /// Used from the main thread only. It never logs the text it handles.
 final class PasteTransaction {
-    /// A clipboard larger than this is not saved; the transcript then stays on it.
-    private static let snapshotByteBudget = 16 * 1024 * 1024
-    /// Nor is one that takes longer than this to read. Content another app provides on
-    /// demand (a large selection, Universal Clipboard) can take seconds.
-    private static let snapshotTimeBudget: TimeInterval = 0.25
-    /// After a read this slow, focus may have moved: the destination is checked again.
-    private static let slowSnapshot: TimeInterval = 0.3
-
     /// Tell clipboard managers this entry is temporary and should not be kept in history.
     private static let markerTypes = [
         "org.nspasteboard.TransientType",
@@ -25,8 +17,8 @@ final class PasteTransaction {
 
     private struct Pending {
         let pasteId: Int
-        /// Nil when the clipboard was too large to save.
-        let saved: [[NSPasteboard.PasteboardType: Data]]?
+        /// Nil when the clipboard could not be saved whole (see `ClipboardSnapshot`).
+        let saved: ClipboardSnapshot?
         let changeCount: Int
         let timer: DispatchWorkItem
     }
@@ -52,47 +44,70 @@ final class PasteTransaction {
         PostAccess.decide(trusted: AXIsProcessTrusted(), preflight: { CGPreflightPostEventAccess() })
     }
 
-    /// Returns the outcome: `pasted`, `targetChanged`, `secureField` or `noPostAccess`.
-    /// Anything other than `pasted` leaves the clipboard untouched. `detail` says why:
-    /// for `targetChanged`, which part of the destination differs; for `secureField`,
-    /// what marked it as one; for `noPostAccess`, what the two permission checks said,
-    /// or `keyEvent` when the key press could not be made.
-    func paste(pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int) -> (outcome: String, detail: String?) {
-        let access = Self.mayPostEvents()
-        guard access.allowed else { return ("noPostAccess", access.detail) }
-        // The key press is made before the clipboard is touched: without it nothing can
-        // be pasted, and the clipboard must then be left as it is.
-        guard let keys = makePasteShortcut() else { return ("noPostAccess", "keyEvent") }
-
-        if let refusal = refusal(for: targetId) { return refusal }
-
-        // Finish any earlier paste first, or its transcript would be saved as "the clipboard".
-        settle()
-
+    /// Returns the outcome: `pasted`, `targetChanged`, `secureField`, `noPostAccess` or
+    /// `expired`. `detail` says why: for `targetChanged`, which part of the destination
+    /// differs; for `secureField`, what marked it as one; for `noPostAccess`, what the
+    /// two permission checks said, or `keyEvent` when the key press could not be made;
+    /// for `expired`, where the time ran out.
+    ///
+    /// Anything other than `pasted` leaves the clipboard as it was. (One exception: when
+    /// the time runs out after the text was written and the clipboard could not be
+    /// saved, there is nothing to put back, and the text stays on it.)
+    ///
+    /// The order of the steps, and when the paste is called off, is `PasteSequence`.
+    /// `expiresAtMs` is when the app stops waiting, in milliseconds since the epoch.
+    func paste(
+        pasteId: Int,
+        text: String,
+        targetId: Int?,
+        restoreDelayMs: Int,
+        expiresAtMs: Double? = nil
+    ) -> (outcome: String, detail: String?) {
         let pasteboard = NSPasteboard.general
-        let readStarted = Date()
-        let saved = snapshot(pasteboard)
-        if Date().timeIntervalSince(readStarted) > Self.slowSnapshot, let refusal = refusal(for: targetId) {
-            return refusal
-        }
-        pasteboard.prepareForNewContents(with: .currentHostOnly)
-        pasteboard.setString(text, forType: .string)
-        for marker in Self.markerTypes {
-            pasteboard.setData(Data(), forType: marker)
-        }
-        let changeCount = pasteboard.changeCount
+        var keys: (down: CGEvent, up: CGEvent)?
+        var saved: ClipboardSnapshot?
+        var changeCount = 0
 
-        // Give the pasteboard server a moment before the target app asks for the data.
-        usleep(20000)
-        keys.down.post(tap: .cgSessionEventTap)
-        // Some apps miss a key-up that follows its key-down with no gap.
-        usleep(8000)
-        keys.up.post(tap: .cgSessionEventTap)
-
-        let timer = DispatchWorkItem { [weak self] in self?.settle() }
-        pending = Pending(pasteId: pasteId, saved: saved, changeCount: changeCount, timer: timer)
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(restoreDelayMs), execute: timer)
-        return ("pasted", nil)
+        let steps = PasteSteps(
+            now: { Date().timeIntervalSince1970 * 1_000 },
+            postAccess: { Self.mayPostEvents() },
+            prepareKeys: {
+                keys = self.makePasteShortcut()
+                return keys != nil
+            },
+            refusal: { afterWait in self.refusal(for: targetId, afterWait: afterWait) },
+            settleEarlierPaste: { self.settle() },
+            saveClipboard: { saved = ClipboardSnapshot.capture(pasteboard) },
+            writeText: {
+                pasteboard.prepareForNewContents(with: .currentHostOnly)
+                pasteboard.setString(text, forType: .string)
+                for marker in Self.markerTypes {
+                    pasteboard.setData(Data(), forType: marker)
+                }
+                changeCount = pasteboard.changeCount
+                // Give the pasteboard server a moment before the target app asks for the data.
+                usleep(20000)
+            },
+            pressKeys: {
+                guard let keys else { return }
+                keys.down.post(tap: .cgSessionEventTap)
+                // Some apps miss a key-up that follows its key-down with no gap.
+                usleep(8000)
+                keys.up.post(tap: .cgSessionEventTap)
+            },
+            takeTextBack: {
+                self.pending = Pending(
+                    pasteId: pasteId, saved: saved, changeCount: changeCount, timer: DispatchWorkItem {}
+                )
+                self.settle()
+            },
+            scheduleRestore: {
+                let timer = DispatchWorkItem { [weak self] in self?.settle() }
+                self.pending = Pending(pasteId: pasteId, saved: saved, changeCount: changeCount, timer: timer)
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(restoreDelayMs), execute: timer)
+            }
+        )
+        return PasteSequence.run(steps, expiresAtMs: expiresAtMs)
     }
 
     /// Restores the clipboard now if a paste is waiting to. Safe to call at any time.
@@ -100,63 +115,39 @@ final class PasteTransaction {
         guard let pending else { return }
         self.pending = nil
         pending.timer.cancel()
-        emit(HelperProtocol.pasteSettled(pasteId: pending.pasteId, restored: restore(pending)))
+        let notRestored = restore(pending)
+        emit(HelperProtocol.pasteSettled(
+            pasteId: pending.pasteId, restored: notRestored == nil, reason: notRestored
+        ))
     }
 
-    private func restore(_ pending: Pending) -> Bool {
+    /// Puts the saved clipboard back. Returns nil when it did, or why it was left as it
+    /// is: `copiedSince` (the user copied something after the paste, and keeps it),
+    /// `notSaved` (there was no complete copy to put back, so the pasted text stays on
+    /// the clipboard) or `failed` (the pasteboard would not take the copy).
+    private func restore(_ pending: Pending) -> String? {
         let pasteboard = NSPasteboard.general
         // A different change count means the user copied something after the paste. Keep theirs.
-        guard pasteboard.changeCount == pending.changeCount, let saved = pending.saved else {
-            return false
-        }
-        pasteboard.clearContents()
-        let items = saved.map { entry -> NSPasteboardItem in
-            let item = NSPasteboardItem()
-            for (type, data) in entry {
-                item.setData(data, forType: type)
-            }
-            return item
-        }
-        if items.isEmpty == false {
-            pasteboard.writeObjects(items)
-        }
-        return true
+        guard pasteboard.changeCount == pending.changeCount else { return "copiedSince" }
+        guard let saved = pending.saved else { return "notSaved" }
+        return saved.restore(to: pasteboard) ? nil : "failed"
     }
 
     /// Why a paste into this destination must be refused, or nil when it may go ahead.
-    private func refusal(for targetId: Int?) -> (outcome: String, detail: String?)? {
+    private func refusal(for targetId: Int?, afterWait: Bool) -> (outcome: String, detail: String?)? {
         if let targetId {
-            switch targets.compare(targetId: targetId) {
+            switch targets.compare(targetId: targetId, afterWait: afterWait) {
             case .same: return nil
             case .changed(let what): return ("targetChanged", what)
             case .secure(let why): return ("secureField", why)
             }
         }
-        if let why = targets.current()?.secureReason { return ("secureField", why) }
+        guard let now = targets.current() else { return nil }
+        // With no recorded destination to ask, the app that was last seen in front is
+        // asked whether it still is.
+        if afterWait, targets.isFrontmost(now.pid) != true { return ("targetChanged", "app") }
+        if let why = now.secureReason { return ("secureField", why) }
         return nil
-    }
-
-    /// The clipboard as it is now, to be put back after the paste. Nil means it could
-    /// not be saved (too large, too slow, or unreadable), and the transcript then stays
-    /// on the clipboard: putting back a copy that is incomplete would lose what was there.
-    private func snapshot(_ pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]]? {
-        // Nil here is a failed read, not an empty clipboard.
-        guard let pasteboardItems = pasteboard.pasteboardItems else { return nil }
-        let deadline = Date().addingTimeInterval(Self.snapshotTimeBudget)
-        var total = 0
-        var items: [[NSPasteboard.PasteboardType: Data]] = []
-        for item in pasteboardItems {
-            var entry: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if Date() > deadline { return nil }
-                guard let data = item.data(forType: type) else { continue }
-                total += data.count
-                if total > Self.snapshotByteBudget { return nil }
-                entry[type] = data
-            }
-            items.append(entry)
-        }
-        return items
     }
 
     /// The Cmd+V key press, ready to post, or nil if it cannot be made.

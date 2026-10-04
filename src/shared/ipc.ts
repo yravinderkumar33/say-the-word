@@ -120,4 +120,10 @@ export interface AppStatus {
     downloadError: string | null
   }
   microphone: 'granted' | 'denied' | 'not-determined' | 'restricted' | 'unknown'
+  /**
+   * True while every dictation's recording and text are being written to disk
+   * ("Save every dictation" in the menu). It is the one thing that makes the app keep
+   * what was said, so the setup window shows it.
+   */
+  savingDictations: boolean
 }

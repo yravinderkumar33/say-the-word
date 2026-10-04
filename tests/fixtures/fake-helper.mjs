@@ -2,7 +2,7 @@
 // It speaks the same JSON-lines protocol and can be told to misbehave.
 import { createInterface } from 'node:readline'
 
-const protocol = Number(process.env.FAKE_HELPER_PROTOCOL ?? 2)
+const protocol = Number(process.env.FAKE_HELPER_PROTOCOL ?? 3)
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
 
 // Stray output that is not part of the protocol must be ignored by the bridge.
@@ -33,6 +33,15 @@ lines.on('line', (line) => {
         result: { targetId: 7, secure: false, hasElement: true, bundleId: 'com.example.app' },
       })
     case 'paste':
+      if (request.text === 'too late') {
+        // Says how long the app allowed, so a test can see the expiry that was sent.
+        const allowedMs = Math.round(request.expiresAt - Date.now())
+        return send({
+          id: request.id,
+          ok: true,
+          result: { outcome: 'expired', detail: `allowed:${allowedMs}` },
+        })
+      }
       send({
         id: request.id,
         ok: true,

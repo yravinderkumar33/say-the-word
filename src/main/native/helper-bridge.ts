@@ -35,10 +35,18 @@ const RESTART_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000]
 /**
  * A paste gets longer to answer than other requests. Before it presses the keys the
  * helper reads the destination again (each read may wait 0.3 s on a busy app) and
- * saves the clipboard. A reply given up on too early is reported as a failure although
- * the paste then lands, and the text is pasted a second time by whoever retries.
+ * saves the clipboard, which can wait on whichever app put something there.
  */
 const PASTE_TIMEOUT_MS = 6_000
+/**
+ * How long after it was asked for a paste may still be carried out. The request tells
+ * the helper the moment, and the helper does nothing to the clipboard or the keyboard
+ * after it. Without this, a paste held up past the timeout above would be reported as a
+ * failure and then land anyway, and whoever pasted again by hand would get the text
+ * twice. It ends well before the timeout, so that the answer to a paste begun at the
+ * last moment still arrives in time.
+ */
+export const PASTE_EXPIRY_MS = 4_000
 /** How long a helper gets to leave by itself once its input has been closed. */
 const EXIT_GRACE_MS = 2_000
 /** After this long without a crash, the next restart starts from the shortest delay again. */
@@ -228,12 +236,15 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
     return targetResultSchema.parse(await this.request('captureTarget'))
   }
 
-  /** Pastes into the recorded destination, or refuses if focus has moved since. */
+  /**
+   * Pastes into the recorded destination, or refuses if focus has moved since. A paste
+   * the helper cannot get to in time is not carried out late: see `PASTE_EXPIRY_MS`.
+   */
   async paste(request: { text: string; targetId: number }): Promise<PasteResult> {
     const pasteId = this.nextPasteId++
     const result = await this.request(
       'paste',
-      { ...request, pasteId, restoreDelayMs: 500 },
+      { ...request, pasteId, restoreDelayMs: 500, expiresAt: Date.now() + PASTE_EXPIRY_MS },
       PASTE_TIMEOUT_MS,
     )
     return pasteResultSchema.parse(result)

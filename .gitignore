@@ -18,6 +18,7 @@ tests/fixtures/personal/
 tests/fixtures/audio/
 
 # Tooling and OS noise
+__pycache__/
 .playwright-mcp/
 .DS_Store
 *.log

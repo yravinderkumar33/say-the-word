@@ -3,16 +3,22 @@
 //
 //   npm run models:download
 import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { downloadModel, isModelReady, modelDir, totalBytes } from '../src/main/stt/model-store'
+import { adoptModel, downloadModel, modelDir, totalBytes } from '../src/main/stt/model-store'
 import { modelsRoot } from '../src/main/stt/models-dir'
 
 async function main(): Promise<void> {
   const root = modelsRoot()
   const megabytes = (bytes: number): string => (bytes / 1_000_000).toFixed(0)
 
-  if (await isModelReady(root, DEFAULT_MODEL)) {
+  // Files already on disk are checked, not fetched again: a damaged one is removed here
+  // and downloaded below.
+  const adoption = await adoptModel(root, DEFAULT_MODEL)
+  if (adoption.ready) {
     console.log(`${DEFAULT_MODEL.label} is already downloaded: ${modelDir(root, DEFAULT_MODEL)}`)
     return
+  }
+  for (const name of adoption.check?.damaged ?? []) {
+    console.log(`${name} did not match its checksum and will be downloaded again.`)
   }
 
   console.log(`Downloading ${DEFAULT_MODEL.label} (${megabytes(totalBytes(DEFAULT_MODEL))} MB)…`)

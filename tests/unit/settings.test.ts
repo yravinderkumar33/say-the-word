@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -130,5 +130,52 @@ describe('SettingsStore', () => {
     writeFileSync(file, JSON.stringify({ version: 1 }))
 
     expect(new SettingsStore(file).get()).toEqual(DEFAULT_SETTINGS)
+  })
+
+  describe('when the file cannot be written', () => {
+    /** A folder where the file is first written: every save fails until it is removed. */
+    const blockSaving = (): void => mkdirSync(`${file}.tmp`)
+    const allowSaving = (): void => rmSync(`${file}.tmp`, { recursive: true })
+
+    it.each([
+      [{ mode: 'cleaned' as const }],
+      [{ microphoneId: 'usb-mic-1' }],
+      [{ evaluationRecording: true }],
+      [{ cleanupModel: 'gemma4:e4b' }],
+    ])('does not make the change either: %o', (patch) => {
+      const store = new SettingsStore(file)
+      store.update({ mode: 'verbatim' })
+      const before = store.get()
+      blockSaving()
+
+      expect(() => store.update(patch)).toThrow()
+
+      // What is in force and what is on disk still agree.
+      expect(store.get()).toEqual(before)
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(before)
+    })
+
+    it('makes the same change once the file can be written again', () => {
+      const store = new SettingsStore(file)
+      store.update({ mode: 'verbatim' })
+      blockSaving()
+      expect(() => store.update({ mode: 'cleaned' })).toThrow()
+
+      allowSaving()
+      store.update({ mode: 'cleaned' })
+
+      expect(store.get().mode).toBe('cleaned')
+      expect(new SettingsStore(file).get().mode).toBe('cleaned')
+    })
+
+    it('refuses a change that is not a valid setting, and keeps what it had', () => {
+      const store = new SettingsStore(file)
+      store.update({ mode: 'cleaned' })
+
+      expect(() => store.update({ mode: 'loud' as unknown as 'cleaned' })).toThrow()
+
+      expect(store.get().mode).toBe('cleaned')
+      expect(new SettingsStore(file).get().mode).toBe('cleaned')
+    })
   })
 })

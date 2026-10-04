@@ -4,7 +4,7 @@ import Foundation
 /// The TypeScript side of the same contract is `src/shared/helper-protocol.ts`.
 public enum HelperProtocol {
     /// Bumped whenever a message changes shape. The app refuses a mismatch.
-    public static let version = 2
+    public static let version = 3
 
     public static let helperVersion = "0.1.0"
 
@@ -45,8 +45,11 @@ public enum HelperProtocol {
         ["type": "tapState", "installed": installed, "reason": reason]
     }
 
-    /// Sent once the clipboard has been restored, or deliberately left alone.
-    public static func pasteSettled(pasteId: Int, restored: Bool) -> [String: Any] {
-        ["type": "pasteSettled", "pasteId": pasteId, "restored": restored]
+    /// Sent once the clipboard has been restored, or left as it is. `reason` says why it
+    /// was left: `copiedSince`, `notSaved` or `failed`.
+    public static func pasteSettled(pasteId: Int, restored: Bool, reason: String? = nil) -> [String: Any] {
+        var message: [String: Any] = ["type": "pasteSettled", "pasteId": pasteId, "restored": restored]
+        if let reason, restored == false { message["reason"] = reason }
+        return message
     }
 }

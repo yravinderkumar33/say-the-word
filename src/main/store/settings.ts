@@ -21,6 +21,7 @@ export const settingsSchema = z.object({
   dictionary: z.array(dictionaryEntrySchema).default([]),
 })
 export type Settings = z.infer<typeof settingsSchema>
+export type SettingsPatch = Partial<Omit<Settings, 'version'>>
 
 export const DEFAULT_SETTINGS: Settings = settingsSchema.parse({ version: 1 })
 
@@ -50,10 +51,17 @@ export class SettingsStore {
     return this.current
   }
 
-  update(patch: Partial<Omit<Settings, 'version'>>): Settings {
-    this.current = settingsSchema.parse({ ...this.current, ...patch })
-    this.write()
-    return this.current
+  /**
+   * Changes settings and saves them. A change takes effect only once it is on disk: if
+   * the file cannot be written this throws, and the settings in force stay as they
+   * were. What the app does, what its menu shows and what the file says then still
+   * agree, and the change can be tried again.
+   */
+  update(patch: SettingsPatch): Settings {
+    const next = settingsSchema.parse({ ...this.current, ...patch })
+    this.write(next)
+    this.current = next
+    return next
   }
 
   private read(): Settings {
@@ -112,7 +120,7 @@ export class SettingsStore {
     return settings
   }
 
-  private write(): void {
+  private write(settings: Settings): void {
     mkdirSync(dirname(this.filePath), { recursive: true })
     if (this.keepOriginal) {
       // The file held something that was not used. It is about to be written over, so
@@ -127,7 +135,7 @@ export class SettingsStore {
     }
     // Written to a temporary file first, so a crash mid-write cannot leave half a file.
     const temporary = `${this.filePath}.tmp`
-    writeFileSync(temporary, `${JSON.stringify(this.current, null, 2)}\n`)
+    writeFileSync(temporary, `${JSON.stringify(settings, null, 2)}\n`)
     renameSync(temporary, this.filePath)
   }
 }

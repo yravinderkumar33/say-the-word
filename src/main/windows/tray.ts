@@ -18,6 +18,8 @@ export interface TrayModel {
 }
 
 export interface TrayActions {
+  /** The pointer has reached the icon: the menu is about to be opened. */
+  approached(): void
   chooseMicrophone(deviceId: string | null): void
   setMode(mode: 'verbatim' | 'cleaned'): void
   chooseCleanupModel(name: string): void
@@ -85,6 +87,9 @@ export class AppTray {
   constructor(private readonly actions: TrayActions) {
     this.tray = new Tray(this.icon)
     this.tray.setToolTip(app.getName())
+    // The menu is drawn ahead of time and cannot be changed once it is open, so what it
+    // says is brought up to date as the pointer arrives, a moment before the click.
+    this.tray.on('mouse-enter', () => this.actions.approached())
     this.render()
   }
 

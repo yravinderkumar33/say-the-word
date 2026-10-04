@@ -12,11 +12,17 @@ import { RecoveryBuffer, type SessionOutcome } from './recovery-buffer'
 /** Where a paste may go, recorded by the helper when recording stops. */
 export interface TargetInfo {
   targetId: number
-  /** True when the focused field is a password field. */
+  /** True when the focused field is treated as a password field. */
   secure: boolean
+  /**
+   * What says so: `element` (the field's own role) or `secureInput` (macOS Secure Input
+   * is on in that app, which is all that can be known about it).
+   */
+  secureReason?: string | undefined
 }
 
-export type PasteOutcome = 'pasted' | 'targetChanged' | 'secureField' | 'noPostAccess'
+/** `expired`: the helper could not get to the paste in time, and did not carry it out late. */
+export type PasteOutcome = 'pasted' | 'targetChanged' | 'secureField' | 'noPostAccess' | 'expired'
 
 export interface ProducedText {
   /** The recognizer's text, untouched. */
@@ -72,7 +78,11 @@ export type Notice =
   | { kind: 'interrupted'; sessionId: number; hasText: boolean }
   | { kind: 'noSpeech'; sessionId: number }
   | { kind: 'targetChanged'; sessionId: number }
-  | { kind: 'secureField'; sessionId: number }
+  /**
+   * `because: 'secureInput'`: nothing says the field is a password field except that
+   * Secure Input is on in its app, and that is what the user is told.
+   */
+  | { kind: 'secureField'; sessionId: number; because?: 'secureInput' }
   | { kind: 'pasteFailed'; sessionId: number }
   /** `canRetry`: the recording is still held and the decode can be tried again. */
   | { kind: 'failed'; sessionId: number; message: string; canRetry?: true }
@@ -100,7 +110,11 @@ export interface SessionControllerDeps {
    * it, neither is offered.
    */
   reproduceText?(session: SessionHandle): Promise<ProducedText | null>
-  /** The recording held for this session will not be asked for again. */
+  /**
+   * The recording held for this session will not be asked for again. A recording is
+   * held from the moment it stops until the controller says this: through the text
+   * being worked out and pasted, and for as long as Undo or Retry is on offer.
+   */
   forgetRecording?(sessionId: number): void
   /** For the double-tap window. Defaults to `setTimeout`; tests pass their own. */
   setTimer?(run: () => void, ms: number): unknown
@@ -210,6 +224,7 @@ export class SessionController {
     if (!isRecording(this.state.name) && !windingUp) return
     this.current = null
     session.abort.abort()
+    this.deps.forgetRecording?.(sessionId)
     this.recovery.record({
       sessionId,
       endedAt: this.deps.now(),
@@ -324,7 +339,7 @@ export class SessionController {
     // Text that still arrives is kept for recovery, and never pasted.
     session.text?.then(
       (produced) => {
-        if (produced?.final) this.recordCancelled(session, produced)
+        if (produced?.final) this.recovery.fill(session.id, stagesOf(produced))
       },
       () => {},
     )
@@ -345,6 +360,8 @@ export class SessionController {
     }
     if (this.salvaging === session) this.salvaging = null
     this.recordCancelled(session, produced)
+    // Nothing offers to run an interrupted session again.
+    this.deps.forgetRecording?.(session.id)
     // A newer session has started since; its pill is not the place for this message.
     if (session.abort.signal.aborted) return
     this.deps.notify({
@@ -369,6 +386,7 @@ export class SessionController {
     let outcome: SessionOutcome
     let failure: string | null = null
     let reachedText = false
+    let secureInput = false
     try {
       // The recording stops and the destination is fixed at the same moment, before
       // any processing delay.
@@ -385,6 +403,7 @@ export class SessionController {
         outcome = 'noSpeech'
       } else if (target.secure) {
         outcome = 'secureField'
+        secureInput = target.secureReason === 'secureInput'
       } else {
         session.pasting = true
         outcome = toSessionOutcome(
@@ -420,7 +439,10 @@ export class SessionController {
       outcome,
       ...stagesOf(produced),
     })
-    this.announce(session.id, outcome, failure)
+    // The session is over. Its recording was held until now, so that a cancel at any
+    // point before this could still be taken back; it is let go unless Retry needs it.
+    if (this.redoable !== session.id) this.deps.forgetRecording?.(session.id)
+    this.announce(session.id, outcome, failure, secureInput)
 
     if (this.isCurrent(session)) {
       this.current = null
@@ -432,11 +454,18 @@ export class SessionController {
     sessionId: number,
     outcome: SessionOutcome,
     failure: string | null = null,
+    secureInput = false,
   ): void {
     switch (outcome) {
+      case 'secureField':
+        this.deps.notify({
+          kind: 'secureField',
+          sessionId,
+          ...(secureInput ? { because: 'secureInput' as const } : {}),
+        })
+        return
       case 'noSpeech':
       case 'targetChanged':
-      case 'secureField':
       case 'pasteFailed':
         this.deps.notify({ kind: outcome, sessionId })
         return
@@ -463,7 +492,7 @@ export class SessionController {
       // Paste-last is an explicit request, so the destination is wherever the user is now.
       const target = await this.deps.captureTarget()
       if (target.secure) {
-        this.deps.notify({ kind: 'secureField', sessionId: entry.sessionId })
+        this.announce(entry.sessionId, 'secureField', null, target.secureReason === 'secureInput')
         return
       }
       const outcome = await this.deps.paste({ text: entry.finalText, targetId: target.targetId })
@@ -485,5 +514,5 @@ export class SessionController {
 }
 
 function toSessionOutcome(outcome: PasteOutcome): SessionOutcome {
-  return outcome === 'noPostAccess' ? 'pasteFailed' : outcome
+  return outcome === 'noPostAccess' || outcome === 'expired' ? 'pasteFailed' : outcome
 }

@@ -34,4 +34,10 @@ export const IPC = {
   requestMicrophone: 'app:request-microphone',
   /** hub → main (invoke): download the speech model. */
   downloadModel: 'app:download-model',
+  /** hub → main (invoke): stop the download that is under way. */
+  cancelDownload: 'app:cancel-download',
+  /** hub → main (invoke): check the model's files, fetch what is damaged, and load it again. */
+  repairModel: 'app:repair-model',
+  /** hub → main (invoke): stop writing dictations to disk. There is no channel that starts it. */
+  stopSavingDictations: 'app:stop-saving-dictations',
 } as const

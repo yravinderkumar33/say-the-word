@@ -8,6 +8,9 @@ const bridge: HubBridge = {
   requestAccessibility: () => ipcRenderer.invoke(IPC.requestAccessibility) as Promise<void>,
   requestMicrophone: () => ipcRenderer.invoke(IPC.requestMicrophone) as Promise<void>,
   downloadModel: () => ipcRenderer.invoke(IPC.downloadModel) as Promise<void>,
+  cancelDownload: () => ipcRenderer.invoke(IPC.cancelDownload) as Promise<void>,
+  repairModel: () => ipcRenderer.invoke(IPC.repairModel) as Promise<void>,
+  stopSavingDictations: () => ipcRenderer.invoke(IPC.stopSavingDictations) as Promise<void>,
 }
 
 contextBridge.exposeInMainWorld('flowHub', bridge)

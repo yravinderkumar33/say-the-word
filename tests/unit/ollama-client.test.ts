@@ -140,6 +140,22 @@ describe('chat', () => {
     await expect(client.chat(request)).rejects.toMatchObject({ kind: 'stream' })
   })
 
+  it.each([
+    ['an empty response', ''],
+    [
+      'an unfinished response',
+      line({ message: { role: 'assistant', content: 'Hello' }, done: false }),
+    ],
+    ['content with no completion record', piece('Hello')],
+  ])('reports %s as an incomplete stream', async (_name, reply) => {
+    const client = await serve({ '/api/chat': stream([reply]) })
+
+    await expect(client.chat(request)).rejects.toMatchObject({
+      kind: 'stream',
+      message: 'Ollama ended the chat reply before completion',
+    })
+  })
+
   it('reports a model that is not installed', async () => {
     const client = await serve({
       '/api/chat': (_request, response) =>
@@ -270,6 +286,289 @@ describe('server information', () => {
 
     expect(await client.show('alias')).toEqual({ capabilities: ['completion'], remote: true })
     await expect(client.show('gone')).rejects.toMatchObject({ kind: 'http' })
+  })
+})
+
+describe('a server that answers with a redirect', () => {
+  let elsewhere: Server | null = null
+  /** What reached the address the redirects point to. Nothing should. */
+  let arrived: Array<{ url: string; body: string }> = []
+
+  /** A second server, standing in for wherever a redirect might lead. */
+  async function elsewhereUrl(): Promise<string> {
+    arrived = []
+    elsewhere = createServer((incoming, response) => {
+      let body = ''
+      incoming.on('data', (chunk: Buffer) => (body += chunk.toString()))
+      incoming.on('end', () => {
+        arrived.push({ url: incoming.url ?? '', body })
+        response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+        response.end(piece('forwarded') + done())
+      })
+    })
+    await new Promise<void>((resolve) => elsewhere!.listen(0, '127.0.0.1', resolve))
+    return `http://127.0.0.1:${(elsewhere.address() as AddressInfo).port}`
+  }
+
+  const redirectTo =
+    (location: string, status: number): Handler =>
+    (_request, response) => {
+      response.writeHead(status, { location })
+      response.end()
+    }
+
+  afterEach(async () => {
+    elsewhere?.closeAllConnections()
+    await new Promise((resolve) => (elsewhere ? elsewhere.close(resolve) : resolve(null)))
+    elsewhere = null
+  })
+
+  it.each([307, 308, 301, 302, 303])(
+    'does not take the chat request, or the text in it, where a %i points',
+    async (status) => {
+      const target = await elsewhereUrl()
+      const client = await serve({ '/api/chat': redirectTo(`${target}/api/chat`, status) })
+
+      const outcome = client.chat({
+        model: 'm',
+        messages: [{ role: 'user', content: 'TEXT THAT MUST STAY HERE' }],
+        numPredict: 40,
+      })
+
+      await expect(outcome).rejects.toMatchObject({ name: 'OllamaError', kind: 'redirect' })
+      // Long enough for a followed redirect to have arrived.
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(arrived).toEqual([])
+    },
+  )
+
+  it('does not follow one when listing models or reading one', async () => {
+    const target = await elsewhereUrl()
+    const client = await serve({
+      '/api/tags': redirectTo(`${target}/api/tags`, 302),
+      '/api/show': redirectTo(`${target}/api/show`, 307),
+    })
+
+    await expect(client.models()).rejects.toMatchObject({ kind: 'redirect' })
+    await expect(client.show('qwen3.5:4b')).rejects.toMatchObject({ kind: 'redirect' })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(arrived).toEqual([])
+  })
+
+  it('does not follow one when asking for the version or warming a model', async () => {
+    const target = await elsewhereUrl()
+    const client = await serve({
+      '/api/version': redirectTo(`${target}/api/version`, 302),
+      '/api/chat': redirectTo(`${target}/api/chat`, 307),
+    })
+
+    expect(await client.version()).toBeNull()
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: false,
+      redirected: true,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(arrived).toEqual([])
+  })
+
+  it('refuses a redirect that points back at this machine all the same', async () => {
+    const client = await serve({
+      '/api/chat': redirectTo('/api/somewhere-else', 307),
+      '/api/somewhere-else': stream([piece('followed'), done()]),
+    })
+
+    await expect(client.chat(request)).rejects.toMatchObject({ kind: 'redirect' })
+  })
+})
+
+describe('a reply that names another machine', () => {
+  const remoteLine = line({
+    message: { role: 'assistant', content: 'Te' },
+    remote_host: 'https://ollama.com',
+  })
+  /** How many pieces of the reply the server got to send before the reading stopped. */
+  let written = 0
+  const counted = (chunks: string[]): Handler => {
+    written = 0
+    return (_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+      const next = (index: number): void => {
+        if (index >= chunks.length || response.destroyed) return
+        written += 1
+        response.write(chunks[index])
+        setTimeout(() => next(index + 1), 30)
+      }
+      next(0)
+    }
+  }
+
+  it('is read no further than the line that says so', async () => {
+    const client = await serve({
+      '/api/chat': counted([remoteLine, piece('xt that is'), piece(' never wanted.'), done()]),
+    })
+
+    const result = await client.chat(request)
+
+    expect(result).toMatchObject({ remote: true, doneReason: 'abandoned' })
+    expect(result.content).toBe('')
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    expect(written).toBeLessThan(4)
+  })
+
+  it('has said so even if an error line follows', async () => {
+    const client = await serve({
+      '/api/chat': stream([remoteLine + line({ error: 'model runner has stopped' })]),
+    })
+
+    expect((await client.chat(request)).remote).toBe(true)
+  })
+
+  it('has said so even if the error is on the same line', async () => {
+    const client = await serve({
+      '/api/chat': stream([line({ error: 'upstream failed', remote_model: 'big:cloud' })]),
+    })
+
+    expect((await client.chat(request)).remote).toBe(true)
+  })
+
+  it('has said so even if the rest never comes', async () => {
+    // The first line, and then silence with the connection left open.
+    const client = await serve({ '/api/chat': stream([remoteLine], false) })
+
+    const result = await client.chat({ ...request, signal: AbortSignal.timeout(2_000) })
+
+    expect(result.remote).toBe(true)
+  })
+
+  it('is reported by a warm-up, whatever would have followed', async () => {
+    const client = await serve({
+      '/api/chat': stream([remoteLine, line({ error: 'model runner has stopped' })]),
+    })
+
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: true,
+      redirected: false,
+    })
+  })
+
+  it('does not make a local reply that fails look remote', async () => {
+    const client = await serve({
+      '/api/chat': stream([piece('Te'), line({ error: 'model runner has stopped' })]),
+    })
+
+    await expect(client.chat(request)).rejects.toMatchObject({ kind: 'stream' })
+  })
+})
+
+describe('warming a model', () => {
+  it('says where the reply came from', async () => {
+    const local = await serve({ '/api/chat': stream([piece('x'), done()]) })
+    expect(await local.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: false,
+      redirected: false,
+    })
+    server?.closeAllConnections()
+    await new Promise((resolve) => server!.close(resolve))
+
+    const remote = await serve({
+      '/api/chat': stream([piece('x'), done({ remote_host: 'https://ollama.com' })]),
+    })
+    expect(await remote.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: true,
+      redirected: false,
+    })
+  })
+
+  it('answers null, and does not throw, when the model cannot be reached', async () => {
+    const client = new OllamaClient('http://127.0.0.1:9')
+
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toBeNull()
+  })
+
+  it.each([
+    ['an empty response', ''],
+    ['whitespace only', '\n  \n'],
+    ['an unfinished response', line({ message: { role: 'assistant', content: 'x' }, done: false })],
+    ['content with no completion record', piece('x')],
+    ['invalid JSON', '<html>proxy error</html>\n'],
+    ['a JSON null', line(null)],
+    ['a JSON array', line([])],
+    ['a JSON primitive', line(true)],
+    ['an unrelated JSON object', line({ ready: true })],
+    ['a missing terminal message', line({ done: true })],
+    ['an invalid message', done({ message: { role: 'assistant', content: 1 } })],
+    ['an invalid message role', done({ message: { role: 'user', content: '' } })],
+    ['an invalid done flag', done({ done: 'true' })],
+    ['an invalid completion reason', done({ done_reason: 1 })],
+    ['malformed data before completion', line({ unexpected: true }) + done()],
+    ['content after completion', done() + piece('x')],
+    ['two completion records', done() + done()],
+    ['an error after completion', done() + line({ error: 'failed' })],
+  ])('does not establish locality from %s', async (_name, reply) => {
+    const client = await serve({ '/api/chat': stream([reply]) })
+
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toBeNull()
+  })
+
+  it.each([[0xc2], [0xe2, 0x82]])(
+    'rejects truncated UTF-8 bytes after an otherwise complete reply (%j)',
+    async (...tail) => {
+      const client = await serve({
+        '/api/chat': (_request, response) => {
+          response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+          response.end(Buffer.concat([Buffer.from(done()), Buffer.from(tail)]))
+        },
+      })
+
+      expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toBeNull()
+    },
+  )
+
+  it('still reports remote metadata before truncated UTF-8 bytes', async () => {
+    const client = await serve({
+      '/api/chat': (_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/x-ndjson' })
+        response.end(
+          Buffer.concat([
+            Buffer.from(line({ remote_host: 'https://ollama.com' })),
+            Buffer.from([0xc2]),
+          ]),
+        )
+      },
+    })
+
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: true,
+      redirected: false,
+    })
+  })
+
+  it.each([
+    ['a token limit completion', piece('x') + done({ done_reason: 'length' })],
+    ['an empty completed reply', done()],
+    ['a completion without an optional reason', done({ done_reason: undefined })],
+    ['a terminal record without a trailing newline', done().trimEnd()],
+  ])('establishes locality from %s', async (_name, reply) => {
+    const client = await serve({ '/api/chat': stream([reply]) })
+
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: false,
+      redirected: false,
+    })
+  })
+
+  it.each([
+    ['without completion', line({ remote_host: 'https://ollama.com', done: false })],
+    ['with malformed chat data', line({ remote_host: 'https://ollama.com', message: 1 })],
+    ['followed by malformed data', line({ remote_host: 'https://ollama.com' }) + 'not json\n'],
+    ['after a local completion record', done() + line({ remote_model: 'big:cloud' })],
+  ])('still reports remote execution %s', async (_name, reply) => {
+    const client = await serve({ '/api/chat': stream([reply]) })
+
+    expect(await client.warm('m', [{ role: 'system', content: 'instructions' }])).toEqual({
+      remote: true,
+      redirected: false,
+    })
   })
 })
 

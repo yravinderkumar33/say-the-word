@@ -206,6 +206,38 @@ struct BindingMatcherTests {
         #expect(up == MatcherDecision(swallow: true), "The key-down was dropped, so the key-up must be too.")
     }
 
+    @Test mutating func anEscapeStillHeldFromTheLastSessionDoesNotDisarmTheNextOne() {
+        // The first session is cancelled with Escape, and Escape is kept down.
+        sut.armEscape(true)
+        _ = sut.keyDown(keyCode: Self.escape, isRepeat: false)
+        sut.armEscape(false)
+
+        // A hands-free session starts and arms Escape again; only then is the old press let go.
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: true)
+        _ = sut.keyDown(keyCode: Self.space, isRepeat: false)
+        sut.armEscape(true)
+        _ = sut.keyUp(keyCode: Self.space)
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: false)
+        let oldRelease = sut.keyUp(keyCode: Self.escape)
+        let newPress = sut.keyDown(keyCode: Self.escape, isRepeat: false)
+        let newRelease = sut.keyUp(keyCode: Self.escape)
+
+        #expect(oldRelease == MatcherDecision(swallow: true), "Its key-down was dropped.")
+        #expect(newPress == MatcherDecision(events: [.cancel], swallow: true))
+        #expect(newRelease == MatcherDecision(swallow: true))
+    }
+
+    @Test mutating func aRepeatOfTheEscapeThatCancelledIsNotASecondCancel() {
+        sut.armEscape(true)
+        _ = sut.keyDown(keyCode: Self.escape, isRepeat: false)
+        // The next session arms Escape while the key is still down and repeating.
+        sut.armEscape(true)
+
+        let repeated = sut.keyDown(keyCode: Self.escape, isRepeat: true)
+
+        #expect(repeated == MatcherDecision(swallow: true))
+    }
+
     // MARK: Reset and reconfiguration
 
     @Test mutating func resetEndsActiveBindingsAndForgetsKeyState() {

@@ -60,8 +60,16 @@ final class SystemActions: HelperActions {
         return String(cString: buffer)
     }
 
-    func paste(pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int) -> [String: Any] {
-        let result = paster.paste(pasteId: pasteId, text: text, targetId: targetId, restoreDelayMs: restoreDelayMs)
+    func paste(
+        pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int, expiresAtMs: Double?
+    ) -> [String: Any] {
+        let result = paster.paste(
+            pasteId: pasteId,
+            text: text,
+            targetId: targetId,
+            restoreDelayMs: restoreDelayMs,
+            expiresAtMs: expiresAtMs
+        )
         var reply: [String: Any] = ["outcome": result.outcome]
         if let detail = result.detail { reply["detail"] = detail }
         return reply

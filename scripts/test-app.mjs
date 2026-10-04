@@ -18,19 +18,26 @@
 //   npm run test:app -- --real-mic 20     opens the real microphone 20 times and cancels,
 //                                         to time how long it takes to go live
 //   npm run test:app -- --packaged        against the packaged app in dist/
+//   npm run test:app -- --packaged --package-dir dist/.qa-security-fixes/mac-arm64
+//                                         against a separately staged package
 //   npm run test:app -- --live-ollama 5   Cleaned mode with the real Ollama on this machine
 //                                         and its real model, five dictations
 import { spawn, spawnSync } from 'node:child_process'
 import {
+  closeSync,
   constants,
   copyFileSync,
+  createReadStream,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
   statSync,
+  writeFileSync,
+  writeSync,
 } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
@@ -41,15 +48,6 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixtures = join(root, 'tests', 'fixtures', 'audio')
 const electronPath = createRequire(import.meta.url)('electron')
-const packagedBinary = join(
-  root,
-  'dist',
-  'mac-arm64',
-  'Whisper Flow Dev.app',
-  'Contents',
-  'MacOS',
-  'Whisper Flow Dev',
-)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const args = process.argv.slice(2)
@@ -58,6 +56,13 @@ const option = (name) => {
   return index === -1 ? null : (args[index + 1] ?? '')
 }
 const packaged = args.includes('--packaged')
+const packagedBinary = join(
+  option('--package-dir') ?? join(root, 'dist', 'mac-arm64'),
+  'Whisper Flow Dev.app',
+  'Contents',
+  'MacOS',
+  'Whisper Flow Dev',
+)
 const repeat = Number(option('--repeat') ?? 1)
 const only = option('--only')
 const latencyRuns = Number(option('--latency') ?? 0)
@@ -265,10 +270,14 @@ async function expectMicrophoneReleased() {
  * port the way Ollama does, and can be told to be slow, wrong, or not local.
  */
 const ollama = {
-  /** echo | slow | garbage | remoteModel | remoteAlias | remoteReply */
+  /** echo | slow | garbage | remoteModel | remoteAlias | remoteReply | remoteWarmUp | emptyWarmUp | incompleteWarmUp */
   behaviour: 'echo',
+  /** How long the model list takes to come back. */
+  tagsDelayMs: 0,
   /** Every chat request, warm-ups included. */
   chats: 0,
+  /** Warm-up requests only; no transcript content. */
+  warms: 0,
   /** The transcripts that chat requests carried. They are compared, never printed. */
   transcripts: [],
   url: '',
@@ -289,7 +298,15 @@ const ollamaServer = createServer((request, response) => {
         capabilities: ['completion'],
         ...(ollama.behaviour === 'remoteModel' ? { remote_host: 'https://ollama.com' } : {}),
       })
-      return json({ models: [entry('stand-in:latest'), entry('leaky:latest')] })
+      const models = [
+        entry('stand-in:latest'),
+        entry('leaky:latest'),
+        entry('leaky-at-once:latest'),
+        entry('empty-warm:latest'),
+        entry('incomplete-warm:latest'),
+        entry('replaced:latest'),
+      ]
+      return setTimeout(() => json({ models }), ollama.tagsDelayMs)
     }
     if (request.url === '/api/show') {
       return json({
@@ -303,17 +320,26 @@ const ollamaServer = createServer((request, response) => {
     const last = JSON.parse(body).messages.at(-1)
     const transcript = /<transcript>\n([\s\S]*)\n<\/transcript>/.exec(last.content)?.[1]
     const done = {
-      message: { content: '' },
+      message: { role: 'assistant', content: '' },
       done: true,
       done_reason: 'stop',
       eval_count: 12,
       eval_duration: 4e8,
     }
     // A warm-up carries the instructions and no transcript.
-    if (last.role !== 'user' || transcript === undefined) return lines(done)
+    if (last.role !== 'user' || transcript === undefined) {
+      ollama.warms += 1
+      if (ollama.behaviour === 'emptyWarmUp') return response.end()
+      if (ollama.behaviour === 'incompleteWarmUp') {
+        return lines({ message: { role: 'assistant', content: '' }, done: false })
+      }
+      return ollama.behaviour === 'remoteWarmUp'
+        ? lines({ ...done, remote_host: 'https://ollama.com' })
+        : lines(done)
+    }
     ollama.transcripts.push(transcript)
 
-    const say = (text) => ({ message: { content: text } })
+    const say = (text) => ({ message: { role: 'assistant', content: text } })
     if (ollama.behaviour === 'slow') return // Never answers; the app's deadline ends it.
     if (ollama.behaviour === 'garbage') {
       return lines(say('I am sorry, but I cannot help with that request today.'), done)
@@ -326,6 +352,46 @@ const ollamaServer = createServer((request, response) => {
 })
 await new Promise((resolve) => ollamaServer.listen(0, '127.0.0.1', resolve))
 ollama.url = `http://127.0.0.1:${ollamaServer.address().port}`
+
+/**
+ * A second stand-in, at an address of its own: it lists a model like any Ollama, and
+ * answers every chat request with a redirect to a third server. Whatever reaches that
+ * third server is something the app sent where nobody had checked.
+ */
+const elsewhere = { arrived: 0, url: '' }
+const elsewhereServer = createServer((request, response) => {
+  request.resume()
+  request.on('end', () => {
+    elsewhere.arrived += 1
+    response.end('{}')
+  })
+})
+await new Promise((resolve) => elsewhereServer.listen(0, '127.0.0.1', resolve))
+elsewhere.url = `http://127.0.0.1:${elsewhereServer.address().port}`
+const redirector = { chats: 0, transcripts: 0, url: '' }
+const redirectingServer = createServer((request, response) => {
+  let body = ''
+  request.on('data', (chunk) => (body += chunk))
+  request.on('end', () => {
+    if (request.url === '/api/tags') {
+      const model = { name: 'stand-in:latest', digest: 'redirecting', capabilities: ['completion'] }
+      return response.end(JSON.stringify({ models: [model] }))
+    }
+    if (request.url === '/api/show') {
+      return response.end(JSON.stringify({ capabilities: ['completion'] }))
+    }
+    redirector.chats += 1
+    // As the other stand-in tells a transcript from a warm-up: by the last message.
+    const last = JSON.parse(body).messages?.at(-1)
+    if (last?.role === 'user' && /<transcript>\n[\s\S]*\n<\/transcript>/.test(last.content)) {
+      redirector.transcripts += 1
+    }
+    response.writeHead(307, { location: `${elsewhere.url}${request.url}` })
+    return response.end()
+  })
+})
+await new Promise((resolve) => redirectingServer.listen(0, '127.0.0.1', resolve))
+redirector.url = `http://127.0.0.1:${redirectingServer.address().port}`
 
 /** Runs a scenario in Cleaned mode against the stand-in, then goes back to Verbatim. */
 async function inCleanedMode(behaviour, run, { url = ollama.url, model = 'stand-in' } = {}) {
@@ -360,6 +426,8 @@ scenario('a dictation arrives intact', async () => {
   const { session, state } = await dictate(SHORT)
   expectPastedIntact(state, session)
   await expectMicrophoneReleased()
+  // Held while the session ran, in case of a cancel and an Undo; not after it.
+  await waitUntil('the recording to be let go', (now) => now.holdsRecording === false, 2_000)
 })
 
 scenario('a second dictation straight after the first has its own text', async () => {
@@ -475,6 +543,47 @@ scenario('Undo after a cancel: the dictation is pasted after all', async () => {
   )
   expectPastedIntact(state, session)
   await waitUntil('the recording to be let go', (now) => now.holdsRecording === false, 2_000)
+})
+
+scenario('Undo after a cancel that came once the words had been heard', async () => {
+  const before = await status()
+  // Holds the session in "processing" after the recognizer has answered, which is where
+  // Cleaned mode spends its time while the model works.
+  send('text-delay 2500')
+  try {
+    play(SHORT)
+    const session = await press()
+    await sleep(SHORT.ms + 400)
+    const from = log.length
+    send('release')
+    await waitForLog(`[speech] heard (session ${session})`, 5_000, from)
+    send('escape')
+    const cancelled = await waitUntil(
+      'the Cancelled message',
+      (now) => now.state === 'idle' && now.pill === 'recovery',
+      2_000,
+    )
+    expect(cancelled.pastes.length === before.pastes.length, 'something was pasted')
+    expect(cancelled.holdsRecording === true, 'the recording was let go while Undo was on offer')
+    // What had been heard is kept, cancelled or not.
+    await waitUntil('the text to be kept', (now) => entryOf(now, session)?.hasText === true, 2_000)
+
+    send('click-pill Undo')
+    const state = await waitUntil(
+      'the paste',
+      (now) => now.state === 'idle' && now.pastes.length === before.pastes.length + 1,
+      10_000,
+    )
+    expectPastedIntact(state, session)
+    expect(
+      count(`[dictation] failed (session ${session})`) === 0,
+      'Undo ended in an error although it was offered',
+    )
+    await waitUntil('the recording to be let go', (now) => now.holdsRecording === false, 2_000)
+    await expectMicrophoneReleased()
+  } finally {
+    send('text-delay 0')
+  }
 })
 
 scenario(
@@ -926,6 +1035,57 @@ scenario('Cleaned mode: the model is given the transcript and its text is pasted
   })
 })
 
+for (const [behaviour, model, what] of [
+  ['emptyWarmUp', 'empty-warm', 'empty'],
+  ['incompleteWarmUp', 'incomplete-warm', 'unfinished'],
+]) {
+  scenario(`Cleaned mode, an ${what} warm-up: the transcript is never sent`, async () => {
+    await inCleanedMode(
+      behaviour,
+      async () => {
+        const sent = ollama.transcripts.length
+        const warms = ollama.warms
+        const { session, state } = await dictate(SHORT)
+        expectPastedIntact(state, session)
+        expect(entryOf(state, session).note === 'failed', `note: ${entryOf(state, session).note}`)
+        expect(ollama.warms > warms, 'the warm-up response was never exercised')
+        expect(ollama.transcripts.length === sent, 'an incomplete warm-up authorized a transcript')
+      },
+      { model },
+    )
+  })
+}
+
+scenario(
+  'Cleaned mode, a replacement model: the old warm-up cannot authorize its transcript',
+  async () => {
+    await inCleanedMode(
+      'echo',
+      async () => {
+        const first = await dictate(SHORT)
+        expectPastedIntact(first.state, first.session)
+        expect(
+          entryOf(first.state, first.session).note === 'cleaned',
+          'the first model was not used',
+        )
+        const sent = ollama.transcripts.length
+        const warms = ollama.warms
+        // The name and server stay the same; tags now reports a replacement digest.
+        ollama.behaviour = 'remoteWarmUp'
+        const second = await dictate(SHORT)
+        expectPastedIntact(second.state, second.session)
+        const note = entryOf(second.state, second.session).note
+        expect(note === 'notLocal:blocked', `note: ${note}`)
+        expect(ollama.warms > warms, 'the replacement was not asked for its own warm-up')
+        expect(ollama.transcripts.length === sent, 'the replacement inherited the old approval')
+      },
+      { model: 'replaced' },
+    )
+  },
+  // The deliberately blocked model stays blocked for this app process.
+  { once: true },
+)
+
 scenario('Cleaned mode, Ollama not running: the rules-only text is pasted at once', async () => {
   await inCleanedMode(
     'echo',
@@ -1011,6 +1171,122 @@ scenario(
   },
 )
 
+scenario(
+  'Cleaned mode, a warm-up reply from another machine: the transcript is never sent',
+  async () => {
+    await inCleanedMode(
+      'remoteWarmUp',
+      async () => {
+        const sent = ollama.transcripts.length
+        const { session, state } = await dictate(SHORT)
+        expectPastedIntact(state, session)
+        const note = entryOf(state, session).note
+        expect(note === 'notLocal:blocked', `note: ${note}`)
+        // The warm-up, sent while the words were still being spoken, was the last
+        // thing this model was given.
+        expect(ollama.transcripts.length === sent, 'the transcript was sent to the model')
+        await waitUntil(
+          'the tray to say why',
+          (now) => now.cleanup.includes('answered from another machine'),
+          3_000,
+        )
+      },
+      { model: 'leaky-at-once' },
+    )
+  },
+)
+
+scenario(
+  'Cleaned mode, Ollama answers with a redirect: it is not followed, and the rules-only text is pasted',
+  async () => {
+    await inCleanedMode(
+      'echo',
+      async () => {
+        const { session, state } = await dictate(SHORT)
+        expectPastedIntact(state, session)
+        const note = entryOf(state, session).note
+        expect(note === 'notLocal:redirected', `note: ${note}`)
+        expect(redirector.chats > 0, 'the stand-in was never asked, so nothing was tested')
+        // The warm-up, sent while the words were being spoken, was answered with the
+        // redirect. That was enough: the transcript was never sent to this server.
+        expect(redirector.transcripts === 0, 'the transcript was sent to a server that redirects')
+        // Long enough for a followed redirect to have arrived.
+        await sleep(300)
+        expect(elsewhere.arrived === 0, 'a request was taken to the address a redirect named')
+        await waitUntil(
+          'the tray to say why',
+          (now) => now.cleanup.includes('sends requests elsewhere'),
+          3_000,
+        )
+      },
+      { url: redirector.url },
+    )
+  },
+)
+
+scenario(
+  'the menu does not show an old answer about Cleaned mode beside a newer setting',
+  async () => {
+    // Ollama is slow to say which models it has: the answer to "what will Cleaned mode
+    // do?" is still on its way when the mode is changed back.
+    ollama.tagsDelayMs = 1_200
+    try {
+      send(`ollama-url ${ollama.url}`)
+      send('cleanup-model stand-in')
+      send('mode cleaned')
+      await waitUntil('Cleaned mode', (now) => now.mode === 'cleaned', 2_000)
+      send('mode verbatim')
+      await waitUntil('Verbatim mode', (now) => now.mode === 'verbatim', 2_000)
+      // Long enough for the answer about Cleaned mode to have come back.
+      await sleep(3_200)
+      const state = await status()
+      expect(state.mode === 'verbatim', 'the mode changed back')
+      expect(state.cleanup === '', `in Verbatim mode the menu says "${state.cleanup}"`)
+    } finally {
+      ollama.tagsDelayMs = 0
+      send('mode verbatim')
+    }
+  },
+)
+
+scenario(
+  'Ollama started after the menu was drawn: the menu says so when it is next opened',
+  async () => {
+    // An address nothing listens on yet.
+    const probe = createServer()
+    await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve))
+    const { port } = probe.address()
+    await new Promise((resolve) => probe.close(resolve))
+    const late = createServer(ollamaServer.listeners('request')[0])
+    try {
+      await inCleanedMode(
+        'echo',
+        async () => {
+          await waitUntil(
+            'the menu to say Ollama is not running',
+            (now) => now.cleanup.includes('Ollama is not running'),
+            3_000,
+          )
+          // Ollama is started. Nothing tells the app; the menu is simply opened again.
+          await new Promise((resolve) => late.listen(port, '127.0.0.1', resolve))
+          // The pointer reaching the icon asks again, at most every two seconds.
+          await sleep(2_100)
+          send('approach-tray')
+          await waitUntil(
+            'the menu to say Cleaned mode is working',
+            (now) => now.cleanup === 'Cleaned with stand-in',
+            3_000,
+          )
+        },
+        { url: `http://127.0.0.1:${port}` },
+      )
+    } finally {
+      late.closeAllConnections()
+      late.close()
+    }
+  },
+)
+
 const savedDictations = () => (existsSync(evaluationDir) ? readdirSync(evaluationDir) : [])
 
 scenario(
@@ -1093,6 +1369,45 @@ scenario(
   },
   { once: true },
 )
+
+scenario('a setting that cannot be saved is not changed, and the app says so', async () => {
+  const before = await status()
+  expect(
+    before.mode === 'verbatim' && before.evaluationRecording === false,
+    'the scenario did not start from Verbatim mode with evaluation off',
+  )
+  const saved = savedDictations().length
+  // A folder where the settings file is first written: every save fails until it is removed.
+  const blocker = join(scratch, 'settings.json.tmp')
+  mkdirSync(blocker)
+  try {
+    const from = log.length
+    send('mode cleaned')
+    send('evaluation on')
+    send('microphone a-microphone-that-was-never-saved')
+    await waitForLog('[settings] could not save a change to microphoneId', 3_000, from)
+    const state = await waitUntil('the pill to say so', (now) => now.pill === 'recovery', 2_000)
+    expect(state.mode === 'verbatim', 'the menu shows a mode that was not saved')
+    expect(state.evaluationRecording === false, 'the menu shows evaluation mode as on')
+    expect(
+      state.chosenMicrophone === before.chosenMicrophone,
+      'the menu shows a microphone that was not saved',
+    )
+    // And the app does what its menu says: the text is not cleaned, and nothing is kept.
+    const { session, state: after } = await dictate(SHORT)
+    expectPastedIntact(after, session)
+    expect(entryOf(after, session).note === null, 'the dictation went through Cleaned mode')
+    await sleep(300)
+    expect(savedDictations().length === saved, 'a dictation was saved although the setting was not')
+  } finally {
+    rmSync(blocker, { recursive: true, force: true })
+  }
+  // The same change, asked for again once the cause has passed, is made.
+  send('evaluation on')
+  await waitUntil('the setting to be saved', (now) => now.evaluationRecording === true, 2_000)
+  send('evaluation off')
+  await waitUntil('the setting to be put back', (now) => now.evaluationRecording === false, 2_000)
+})
 
 scenario('model unloaded when idle: the next dictation loads it and arrives intact', async () => {
   await waitUntil('the worker', (now) => now.speech === 'ready', 15_000)
@@ -1210,11 +1525,71 @@ async function measureRealMicrophone(runs) {
   if (rows.length < runs) console.log(`  ${runs - rows.length} runs never went live`)
 }
 
-/** A separate launch with an empty models folder: dictation must refuse, and say why. */
+/**
+ * Where the app under test fetches its model from in the launch below: the real files,
+ * served from this machine, so nothing is fetched from the internet. `holdAfter` makes
+ * it send that many bytes of a file and then go quiet with the connection left open,
+ * which is what a stalled download looks like.
+ */
+const modelSource = { requests: [], holdAfter: null, url: '' }
+const modelSourceServer = createServer((request, response) => {
+  const name = decodeURIComponent((request.url ?? '').slice(1))
+  const path = join(modelDir, MODEL_ID, name)
+  const range = request.headers.range ?? null
+  modelSource.requests.push({ name, range })
+  if (name.includes('/') || name.startsWith('.') || !existsSync(path)) {
+    return response.writeHead(404).end()
+  }
+  const size = statSync(path).size
+  const start = range ? Number(/bytes=(\d+)-/.exec(range)?.[1] ?? 0) : 0
+  response.writeHead(start > 0 ? 206 : 200, { 'content-length': size - start })
+  if (modelSource.holdAfter === null) return createReadStream(path, { start }).pipe(response)
+  const end = Math.min(size, start + modelSource.holdAfter)
+  if (end <= start) return undefined
+  // The part is written, and the reply is never ended.
+  return createReadStream(path, { start, end: end - 1 }).on('data', (chunk) =>
+    response.write(chunk),
+  )
+})
+
+/**
+ * A separate launch with an empty models folder. Dictation must refuse, and say why;
+ * and from there the model is downloaded, damaged, found out and repaired, with the
+ * files coming from the stand-in above.
+ */
 async function withoutModel() {
   const emptyModels = join(scratch, 'no-models')
   mkdirSync(emptyModels, { recursive: true })
-  launch({ WHISPER_FLOW_MODELS_DIR: emptyModels })
+  await new Promise((resolve) => modelSourceServer.listen(0, '127.0.0.1', resolve))
+  modelSource.url = `http://127.0.0.1:${modelSourceServer.address().port}`
+  launch({ WHISPER_FLOW_MODELS_DIR: emptyModels, WHISPER_FLOW_MODEL_SOURCE: modelSource.url })
+  const models = join(emptyModels, MODEL_ID)
+  const fileOf = (name) => join(models, name)
+  const fetched = () => modelSource.requests.map((request) => request.name).join(' ')
+  /** Frees the model, so that the next dictation has to load it from disk again. */
+  const unload = async () => {
+    const from = log.length
+    send('unload-model')
+    await waitForLog('[speech] model unloaded', 5_000, from)
+  }
+  /** A dictation that cannot be turned into text, because the model is not usable. */
+  const dictateInVain = async (logged, timeoutMs) => {
+    const before = await status()
+    const from = log.length
+    play(SHORT)
+    const session = await press()
+    await waitForLog(logged, timeoutMs, from)
+    await sleep(300)
+    send('release')
+    const state = await waitIdle(20_000)
+    expect(state.pastes.length === before.pastes.length, 'something was pasted')
+    expect(
+      entryOf(state, session)?.outcome === 'failed',
+      'the dictation was not recorded as failed',
+    )
+    await expectMicrophoneReleased()
+    return state
+  }
   try {
     await waitForLog('[speech] modelMissing', 20_000)
     send('quiet-paste')
@@ -1228,25 +1603,184 @@ async function withoutModel() {
     expect(state.pill === 'recovery', 'the pill does not say why')
     await expectMicrophoneReleased()
 
-    // The Download button, without the network: every file is already on disk as an
-    // unfinished download of the right size, so the app only has to check and adopt it.
-    const partials = join(emptyModels, MODEL_ID)
-    mkdirSync(partials, { recursive: true })
+    // The Download button, with every file already on disk as an unfinished download of
+    // the right size: the app only has to check them and take them in.
+    mkdirSync(models, { recursive: true })
     for (const name of readdirSync(join(modelDir, MODEL_ID))) {
       if (name.startsWith('.')) continue
       copyFileSync(
         join(modelDir, MODEL_ID, name),
-        join(partials, `${name}.partial`),
+        fileOf(`${name}.partial`),
         constants.COPYFILE_FICLONE,
       )
     }
     send('download-model')
     await waitForLog('[speech] ready', 60_000)
-    expect(existsSync(join(partials, '.verified.json')), 'the model was not marked as verified')
+    expect(existsSync(fileOf('.verified.json')), 'the model was not marked as verified')
+    expect(fetched() === '', `fetched although every file was on disk: ${fetched()}`)
     const { session, state: loaded } = await dictate(SHORT)
     expectPastedIntact(loaded, session, 'the first dictation after the download')
+
+    console.log('  ...a model file changed after it was checked')
+    await unload()
+    const tokens = fileOf('tokens.txt')
+    // Other bytes of the same length, as a failing disk or a stray write might leave.
+    writeFileSync(tokens, Buffer.alloc(statSync(tokens).size))
+    expect(
+      (await status()).modelDownloaded === false,
+      'a model file that was changed still counts as downloaded',
+    )
+    await dictateInVain('did not match their checksums and were removed: tokens.txt', 15_000)
+    expect(!existsSync(tokens), 'the damaged file was left in place')
+    // The download is the repair, and it fetches the one file.
+    modelSource.requests.length = 0
+    let from = log.length
+    send('download-model')
+    await waitForLog('[speech] ready', 60_000, from)
+    expect(fetched() === 'tokens.txt', `fetched: ${fetched() || 'nothing'}`)
+    const repaired = await dictate(SHORT)
+    expectPastedIntact(repaired.state, repaired.session, 'the dictation after the repair')
+
+    console.log('  ...a model file changed in a way only reading it shows')
+    await unload()
+    const joiner = fileOf('joiner.int8.onnx')
+    const descriptor = openSync(joiner, 'r+')
+    writeSync(descriptor, Buffer.alloc(4_096), 0, 4_096, 0)
+    closeSync(descriptor)
+    // The record of the file is made to fit it again, which is how a change that
+    // leaves the size and the date alone looks to the app.
+    const marker = JSON.parse(readFileSync(fileOf('.verified.json'), 'utf8'))
+    marker['#files']['joiner.int8.onnx'].mtimeMs = statSync(joiner).mtimeMs
+    writeFileSync(fileOf('.verified.json'), JSON.stringify(marker))
+    expect(
+      (await status()).modelDownloaded === true,
+      'the change was meant to be one the quick check cannot see',
+    )
+    // The model will not load, and that is when its files are read.
+    const afterFailure = await dictateInVain(
+      'did not match their checksums and were removed: joiner.int8.onnx',
+      60_000,
+    )
+    expect(!existsSync(joiner), 'the damaged file was left in place')
+    expect(afterFailure.modelDownloaded === false, 'the model still counts as downloaded')
+    // The model now counts as not downloaded, and Download is what the setup window
+    // offers: it fetches the file that was removed and loads the model.
+    modelSource.requests.length = 0
+    from = log.length
+    send('download-model')
+    await waitForLog('[speech] ready', 90_000, from)
+    expect(fetched() === 'joiner.int8.onnx', `fetched: ${fetched() || 'nothing'}`)
+    const checked = await dictate(SHORT)
+    expectPastedIntact(checked.state, checked.session, 'the dictation after checking the files')
+
+    console.log('  ...a download that is cancelled part-way, and resumed')
+    await unload()
+    const decoder = fileOf('decoder.int8.onnx')
+    rmSync(decoder)
+    modelSource.holdAfter = 2_000_000
+    modelSource.requests.length = 0
+    send('download-model')
+    const partial = `${decoder}.partial`
+    await waitUntil(
+      'the download to be under way',
+      (now) => now.downloadProgress !== null && existsSync(partial),
+      10_000,
+    )
+    // The stand-in has gone quiet. What it sent is on disk by now.
+    const deadline = Date.now() + 5_000
+    while (statSync(partial).size < 2_000_000 && Date.now() < deadline) await sleep(50)
+    from = log.length
+    send('cancel-download')
+    await waitForLog('[speech] model download cancelled', 5_000, from)
+    const cancelled = await status()
+    expect(cancelled.downloadProgress === null, 'the download still shows as running')
+    expect(cancelled.downloadError === null, 'a cancelled download was reported as an error')
+    expect(
+      statSync(partial).size === 2_000_000,
+      `what had arrived was not kept: ${statSync(partial).size} bytes`,
+    )
+    modelSource.holdAfter = null
+    modelSource.requests.length = 0
+    from = log.length
+    send('download-model')
+    await waitForLog('[speech] ready', 60_000, from)
+    const resumed = modelSource.requests.find((request) => request.name === 'decoder.int8.onnx')
+    expect(resumed?.range === 'bytes=2000000-', `the download did not resume: ${resumed?.range}`)
+    const afterResume = await dictate(SHORT)
+    expectPastedIntact(afterResume.state, afterResume.session, 'the dictation after the resume')
+
+    console.log('  ...a model that is on disk and would not start, checked from the setup window')
+    /** The speech worker dies three times running; the app then stops starting it. */
+    const crashUntilTheAppGivesUp = async () => {
+      for (let crash = 0; crash < 3; crash++) {
+        await waitUntil(
+          'the worker to be running',
+          (now) => now.speech === 'ready' && now.workerPid !== null,
+          20_000,
+        )
+        send('kill-worker')
+        await waitUntil('the worker to stop', (now) => now.speech !== 'ready', 5_000)
+      }
+      return waitUntil('the app to give up', (now) => now.speech === 'failed', 10_000)
+    }
+    const gaveUp = await crashUntilTheAppGivesUp()
+    // This is the state in which the setup window offers "Check the model files".
+    expect(gaveUp.modelDownloaded === true, 'the model no longer counts as downloaded')
+    // With nothing wrong with the files, checking them ends in the model being loaded.
+    modelSource.requests.length = 0
+    from = log.length
+    send('repair-model')
+    await waitForLog('[speech] ready', 90_000, from)
+    expect(fetched() === '', `fetched although nothing was wrong: ${fetched()}`)
+    const reloaded = await dictate(SHORT)
+    expectPastedIntact(
+      reloaded.state,
+      reloaded.session,
+      'the dictation after the files checked out',
+    )
+
+    // Given up again, and this time a file has changed in a way only reading it shows.
+    // Nothing has looked at the files since: the check itself has to find it.
+    await crashUntilTheAppGivesUp()
+    const decoderFile = fileOf('decoder.int8.onnx')
+    const handle = openSync(decoderFile, 'r+')
+    writeSync(handle, Buffer.alloc(4_096), 0, 4_096, 0)
+    closeSync(handle)
+    const record = JSON.parse(readFileSync(fileOf('.verified.json'), 'utf8'))
+    record['#files']['decoder.int8.onnx'].mtimeMs = statSync(decoderFile).mtimeMs
+    writeFileSync(fileOf('.verified.json'), JSON.stringify(record))
+    expect(
+      (await status()).modelDownloaded === true,
+      'the change was meant to be one the quick check cannot see',
+    )
+    modelSource.requests.length = 0
+    from = log.length
+    send('repair-model')
+    await waitForLog(
+      'did not match their checksums and were removed: decoder.int8.onnx',
+      60_000,
+      from,
+    )
+    await waitForLog('[speech] ready', 90_000, from)
+    expect(fetched() === 'decoder.int8.onnx', `fetched: ${fetched() || 'nothing'}`)
+    const mended = await dictate(SHORT)
+    expectPastedIntact(
+      mended.state,
+      mended.session,
+      'the dictation after the check found the damage',
+    )
+
+    // And when the model is in use, the same request is turned away: a click that comes
+    // late must not load the model a second time under a dictation.
+    from = log.length
+    send('repair-model')
+    await sleep(1_500)
+    expect((await status()).speech === 'ready', 'the model was taken away while it was in use')
+    expect(!log.includes('[speech] loading', from), 'the model was loaded again while in use')
   } finally {
     await quit()
+    modelSourceServer.closeAllConnections()
+    modelSourceServer.close()
   }
 }
 
@@ -1289,6 +1823,20 @@ async function measureLiveOllama(runs) {
 
 // --- Run -----------------------------------------------------------------------------
 
+// A run takes minutes, and the Mac may be left alone meanwhile. If its display goes off
+// (which locks the screen) or it goes to sleep, the app ends the dictation in progress,
+// as it should, and the scenario that was running fails for no fault of the app's. That
+// happened twice on 2026-10-04. The Mac is kept awake for as long as this run lasts.
+const awake = spawn('/usr/bin/caffeinate', ['-d', '-i', '-w', String(process.pid)], {
+  stdio: 'ignore',
+})
+awake.on('error', () => {})
+/** How many times the Mac's power state has cut a dictation short in this run. */
+const powerEvents = () =>
+  count('interrupted by sleep') +
+  count('interrupted by screen lock') +
+  count('interrupted by user switch')
+
 const results = []
 launch()
 try {
@@ -1317,11 +1865,17 @@ try {
       for (const item of chosen) {
         if (item.once && round > 0) continue
         const record = tally.get(item.name)
+        const interruptionsBefore = powerEvents()
         try {
           record.detail = (await item.run()) ?? record.detail
           record.passed += 1
         } catch (error) {
-          record.failures.push(error.message)
+          // Said with the failure, so that nobody goes looking for a bug in the app.
+          const cause =
+            powerEvents() > interruptionsBefore
+              ? ' (the Mac locked or went to sleep while this ran; run it again)'
+              : ''
+          record.failures.push(error.message + cause)
           // Leave the app idle for the next scenario, whatever state this one left.
           send('escape')
           send('text-delay 0')
@@ -1365,8 +1919,11 @@ try {
   console.error(`\nStopped: ${error.message}`)
 } finally {
   await quit()
-  ollamaServer.closeAllConnections()
-  ollamaServer.close()
+  awake.kill()
+  for (const server of [ollamaServer, redirectingServer, elsewhereServer]) {
+    server.closeAllConnections()
+    server.close()
+  }
   rmSync(scratch, { recursive: true, force: true })
 }
 

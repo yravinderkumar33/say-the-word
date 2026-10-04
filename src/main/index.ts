@@ -14,6 +14,7 @@ import { handleAppProtocol, registerAppScheme } from './app-protocol'
 import { startDebugControl } from './debug-control'
 import { evaluationDir } from './dictation/evaluation-recorder'
 import { wireDictation } from './dictation/wire-dictation'
+import { latestOnly } from './latest-only'
 import { LogFile, mirrorConsoleTo } from './log-file'
 import { HelperBridge } from './native/helper-bridge'
 import { helperBinaryPath, rendererDir } from './paths'
@@ -25,12 +26,16 @@ import {
 } from './security'
 import { runSmoke } from './smoke'
 import { SettingsStore } from './store/settings'
+import { createSettingsChanger } from './store/settings-changer'
 import { totalBytes } from './stt/model-store'
 import { SttHost } from './stt/stt-host'
 import { showHubWindow } from './windows/hub-window'
 import { loadRenderer } from './windows/load-renderer'
 import { createOverlayWindow, showOverlay } from './windows/overlay-window'
 import { AppTray } from './windows/tray'
+
+/** The menu's line about Ollama is not asked for more often than this as the pointer comes and goes. */
+const TRAY_REFRESH_EVERY_MS = 2_000
 
 /** `--smoke` starts every part once, prints a report and exits. See `smoke.ts`. */
 const isSmoke = process.argv.includes('--smoke')
@@ -104,37 +109,75 @@ async function main(): Promise<void> {
   const settings = new SettingsStore(join(app.getPath('userData'), 'settings.json'))
 
   let microphones: Microphone[] = []
+  // Every change the user makes goes through here: it is made only if it can be saved.
+  const changeSettings = createSettingsChanger({
+    settings,
+    showCurrent: (current) =>
+      tray.update({
+        microphoneId: current.microphoneId,
+        evaluationRecording: current.evaluationRecording,
+        mode: current.mode,
+        cleanupModel: current.cleanupModel,
+      }),
+    tell: (message) => dictation.tell(message),
+  })
   const chooseMicrophone = (deviceId: string | null): void => {
-    settings.update({ microphoneId: deviceId })
-    tray.update({ microphoneId: deviceId })
+    changeSettings({ microphoneId: deviceId })
   }
   const setEvaluationRecording = (on: boolean): void => {
-    settings.update({ evaluationRecording: on })
-    tray.update({ evaluationRecording: on })
+    if (!changeSettings({ evaluationRecording: on })) return
     console.log(`[evaluation] saving dictations: ${on ? 'on' : 'off'}`)
   }
   const setMode = (mode: 'verbatim' | 'cleaned'): void => {
-    settings.update({ mode })
-    tray.update({ mode })
+    if (!changeSettings({ mode })) return
     console.log(`[dictation] mode: ${mode}`)
     refreshCleanupStatus()
   }
-  /** What Cleaned mode will do right now (which model, or why only the rules), for the tray. */
-  const refreshCleanupStatus = (): void => {
-    void dictation.cleanupStatus().then(({ line, models }) =>
+  /**
+   * What Cleaned mode will do right now (which model, or why only the rules), for the
+   * tray. Asking Ollama takes time, and the mode, the model or the server can be
+   * changed meanwhile: only the answer to the latest asking is shown.
+   */
+  const refreshCleanupStatus = latestOnly(
+    async () => {
+      // The answer is about these settings, read at the moment the question is put.
+      const asked = cleanupSettings()
+      return { ...(await dictation.cleanupStatus()), asked }
+    },
+    ({ line, models, asked }) => {
+      // Changed since, by something that did not ask again: the answer is about
+      // settings that are no longer in force, so the question is put once more.
+      if (asked !== cleanupSettings()) return refreshCleanupStatus()
       tray.update({
         cleanup: line,
         cleanupModels: models,
         cleanupModel: settings.get().cleanupModel,
-      }),
-    )
+      })
+    },
+  )
+  /** The settings that decide what Cleaned mode does, as one value that can be compared. */
+  const cleanupSettings = (): string => {
+    const { mode, cleanupModel, ollamaUrl, allowRemoteOllama } = settings.get()
+    return JSON.stringify([mode, cleanupModel, ollamaUrl, allowRemoteOllama])
+  }
+  /**
+   * The pointer has reached the menu-bar icon, so the menu is about to be opened. What
+   * it says about Ollama may be old: Ollama can be started, or stopped, at any time,
+   * and nothing announces it. Asked again here, at most every couple of seconds.
+   */
+  let trayApproachedAt = -Infinity
+  const trayApproached = (): void => {
+    if (settings.get().mode !== 'cleaned') return
+    if (performance.now() - trayApproachedAt < TRAY_REFRESH_EVERY_MS) return
+    trayApproachedAt = performance.now()
+    refreshCleanupStatus()
   }
   const tray = new AppTray({
+    approached: trayApproached,
     chooseMicrophone,
     setMode,
     chooseCleanupModel: (name) => {
-      settings.update({ cleanupModel: name })
-      refreshCleanupStatus()
+      if (changeSettings({ cleanupModel: name })) refreshCleanupStatus()
     },
     setEvaluationRecording,
     showEvaluationFolder: () => {
@@ -222,8 +265,12 @@ async function main(): Promise<void> {
         downloadError: speech.downloadError,
       },
       microphone: systemPreferences.getMediaAccessStatus('microphone'),
+      savingDictations: settings.get().evaluationRecording,
     }
   })
+  // A page can stop the saving of dictations, and cannot start it: that is done in the
+  // menu, by the person at the Mac.
+  handleFromOwnPages(IPC.stopSavingDictations, (): void => setEvaluationRecording(false))
   // macOS shows its own prompt for Accessibility once. After that the button would do
   // nothing, so from the second press on it opens the list in System Settings instead.
   let askedForAccessibility = false
@@ -250,6 +297,11 @@ async function main(): Promise<void> {
     // Not awaited: the download takes minutes, and the status reports its progress.
     void speech.downloadModel()
   })
+  handleFromOwnPages(IPC.cancelDownload, (): void => speech.cancelDownload())
+  handleFromOwnPages(IPC.repairModel, (): void => {
+    // Not awaited either: it may end in a download.
+    void speech.repairModel()
+  })
 
   helper.start()
   if (process.env['WHISPER_FLOW_DEBUG_CONTROL']) {
@@ -258,11 +310,12 @@ async function main(): Promise<void> {
       stt,
       overlay,
       tray,
-      settings,
+      changeSettings,
       chooseMicrophone,
       setMode,
       setEvaluationRecording,
       refreshCleanupStatus,
+      trayApproached,
     })
   }
 

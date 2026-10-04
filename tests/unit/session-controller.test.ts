@@ -507,6 +507,22 @@ describe('when the paste does not happen', () => {
     expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1 }])
   })
 
+  it('says so when Secure Input is all that marks the field', async () => {
+    const t = setup()
+    t.options.target = () =>
+      Promise.resolve({ targetId: 1, secure: true, secureReason: 'secureInput' })
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('kept for copying'))
+    await settle()
+
+    expect(t.pastes).toEqual([])
+    expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1, because: 'secureInput' }])
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      outcome: 'secureField',
+      finalText: 'kept for copying',
+    })
+  })
+
   it('reports no speech and pastes nothing', async () => {
     const t = setup()
     await t.dictate()
@@ -539,6 +555,21 @@ describe('when the paste does not happen', () => {
 
     expect(t.notices).toEqual([{ kind: 'pasteFailed', sessionId: 1 }])
     expect(t.controller.recovery.lastWithText()).toMatchObject({ outcome: 'pasteFailed' })
+  })
+
+  it('treats a paste the helper was too late for as a failed paste, with the text kept', async () => {
+    const t = setup()
+    t.options.paste = () => Promise.resolve('expired')
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('kept'))
+    await settle()
+
+    expect(t.notices).toEqual([{ kind: 'pasteFailed', sessionId: 1 }])
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      outcome: 'pasteFailed',
+      finalText: 'kept',
+    })
+    expect(t.controller.stateName).toBe('idle')
   })
 })
 
@@ -596,6 +627,18 @@ describe('paste-last and copy-last', () => {
 
     expect(t.pastes).toEqual([])
     expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1 }])
+  })
+
+  it('paste-last says so when Secure Input is all that marks the field', async () => {
+    const t = await withOneTranscript()
+    t.options.target = () =>
+      Promise.resolve({ targetId: 9, secure: true, secureReason: 'secureInput' })
+
+    t.controller.dispatch({ type: 'pasteLast' })
+    await settle()
+
+    expect(t.pastes).toEqual([])
+    expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1, because: 'secureInput' }])
   })
 
   it('paste-last during processing cancels that session and pastes the previous text', async () => {
@@ -832,6 +875,162 @@ describe('Undo and Retry', () => {
       sessionId: 1,
       message: 'The recording is no longer held',
     })
+  })
+
+  it('still has the recording when the cancel came after the text was heard', async () => {
+    const t = setupWithRedo()
+    await t.dictate()
+    // Recognition is done and the text is being cleaned when Escape arrives.
+    t.controller.dispatch({ type: 'escape' })
+    expect(t.notices).toEqual([
+      { kind: 'cancelled', sessionId: 1, reason: 'escape', canUndo: true },
+    ])
+    expect(t.forgotten).toEqual([])
+    t.productions[0]!.result.resolve(text('heard before the cancel'))
+    await settle()
+    expect(t.pastes).toEqual([])
+    expect(t.forgotten).toEqual([])
+
+    t.controller.redo()
+    t.redone[0]!.result.resolve(text('Heard before the cancel.'))
+    await settle()
+
+    expect(t.pastes.map((paste) => paste.text)).toEqual(['Heard before the cancel.'])
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      sessionId: 1,
+      outcome: 'pasted',
+      finalText: 'Heard before the cancel.',
+    })
+    expect(t.forgotten).toEqual([1])
+  })
+
+  it('keeps the text already recovered when the Undo itself fails', async () => {
+    const t = setupWithRedo()
+    await t.dictate()
+    t.controller.dispatch({ type: 'escape' })
+    t.productions[0]!.result.resolve(text('heard before the cancel'))
+    await settle()
+
+    t.controller.redo()
+    t.redone[0]!.result.reject(new RecordingGoneError())
+    await settle()
+
+    expect(t.pastes).toEqual([])
+    expect(t.controller.hasText(1)).toBe(true)
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      sessionId: 1,
+      outcome: 'failed',
+      rawText: 'raw heard before the cancel',
+      finalText: 'heard before the cancel',
+    })
+    expect(t.notices.at(-1)).toEqual({
+      kind: 'failed',
+      sessionId: 1,
+      message: 'The recording is no longer held',
+    })
+  })
+
+  it('keeps the text already recovered when the Undo is cancelled in turn', async () => {
+    const t = setupWithRedo()
+    await t.dictate()
+    t.controller.dispatch({ type: 'escape' })
+    t.productions[0]!.result.resolve(text('heard before the cancel'))
+    await settle()
+
+    t.controller.redo()
+    t.controller.dispatch({ type: 'escape' })
+    t.redone[0]!.result.reject(new Error('cancelled'))
+    await settle()
+
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      sessionId: 1,
+      outcome: 'cancelled',
+      finalText: 'heard before the cancel',
+    })
+  })
+
+  it('does not let text from the cancelled attempt replace what the Undo pasted', async () => {
+    const t = setupWithRedo()
+    await t.dictate()
+    t.controller.dispatch({ type: 'escape' })
+
+    t.controller.redo()
+    t.redone[0]!.result.resolve(text('the newer text'))
+    await settle()
+    // Only now does the attempt that was cancelled finish working out its text.
+    t.productions[0]!.result.resolve(text('the older text'))
+    await settle()
+
+    expect(t.pastes.map((paste) => paste.text)).toEqual(['the newer text'])
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      outcome: 'pasted',
+      finalText: 'the newer text',
+    })
+  })
+
+  it('holds the recording until the session is over, and then lets it go', async () => {
+    const pasted = setupWithRedo()
+    await pasted.dictate()
+    expect(pasted.forgotten).toEqual([])
+    pasted.productions[0]!.result.resolve(text('done'))
+    await settle()
+    expect(pasted.forgotten).toEqual([1])
+
+    const silent = setupWithRedo()
+    await silent.dictate()
+    silent.productions[0]!.result.resolve(null)
+    await settle()
+    expect(silent.forgotten).toEqual([1])
+
+    const refused = setupWithRedo()
+    refused.options.paste = () => Promise.resolve('targetChanged')
+    await refused.dictate()
+    refused.productions[0]!.result.resolve(text('kept for copying'))
+    await settle()
+    expect(refused.forgotten).toEqual([1])
+  })
+
+  it('holds the recording for Retry, and lets it go when Retry is no longer offered', async () => {
+    const t = setupWithRedo()
+    await t.dictate()
+    t.productions[0]!.result.reject(new Error('The recognizer took too long'))
+    await settle()
+    expect(t.forgotten).toEqual([])
+
+    t.controller.forgetRedo()
+
+    expect(t.forgotten).toEqual([1])
+  })
+
+  it('lets the recording go when the session is interrupted or cannot record', async () => {
+    const interrupted = setupWithRedo()
+    interrupted.controller.dispatch({ type: 'pttDown', t: 0 })
+    interrupted.controller.dispatch({ type: 'abort' })
+    expect(interrupted.forgotten).toEqual([])
+    interrupted.productions[0]!.result.resolve(text('kept for recovery'))
+    await settle()
+    expect(interrupted.forgotten).toEqual([1])
+
+    const noMicrophone = setupWithRedo()
+    noMicrophone.controller.dispatch({ type: 'pttDown', t: 0 })
+    noMicrophone.controller.failRecording(1, 'No microphone was found')
+    expect(noMicrophone.forgotten).toEqual([1])
+  })
+
+  it('lets the recording go when Escape arrives after the paste was sent', async () => {
+    const t = setupWithRedo()
+    const pasting = deferred<PasteOutcome>()
+    t.options.paste = () => pasting.promise
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('already on its way'))
+    await settle()
+
+    t.controller.dispatch({ type: 'escape' })
+    pasting.resolve('pasted')
+    await settle()
+
+    expect(t.forgotten).toEqual([1])
+    expect(t.controller.recovery.lastWithText()).toMatchObject({ outcome: 'pasted' })
   })
 
   it('refuses a password field like any other paste', async () => {

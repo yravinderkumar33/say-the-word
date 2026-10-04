@@ -76,6 +76,44 @@ enum TestTools {
     /// After the last event, before the process (and its connection to the window server) goes.
     private static let lingerMicroseconds: UInt32 = 60_000
 
+    /// Puts one item on the general clipboard whose text is supplied only when it is
+    /// asked for, and only after `milliseconds`. That is what the clipboard's owner
+    /// being slow looks like to whoever reads it (a large selection in another app, a
+    /// clipboard that comes from another device). Prints `READY`, and goes on serving
+    /// the clipboard until its input closes.
+    ///
+    /// It replaces what is on the clipboard: the test that uses it puts that back.
+    static func slowClipboard(milliseconds: Int) -> Int32 {
+        final class SlowProvider: NSObject, NSPasteboardItemDataProvider {
+            let delay: TimeInterval
+            init(delay: TimeInterval) { self.delay = delay }
+            func pasteboard(
+                _: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType
+            ) {
+                Thread.sleep(forTimeInterval: delay)
+                item.setString("from a slow clipboard", forType: type)
+            }
+        }
+        let provider = SlowProvider(delay: Double(milliseconds) / 1_000)
+        let item = NSPasteboardItem()
+        item.setDataProvider(provider, forTypes: [.string])
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            FileHandle.standardError.write(Data("slow-clipboard: the clipboard did not take the item\n".utf8))
+            return 1
+        }
+        print("READY")
+        fflush(stdout)
+        Thread.detachNewThread {
+            while readLine() != nil {}
+            exit(0)
+        }
+        // The provider is asked on the main thread, through its run loop.
+        withExtendedLifetime(provider) { RunLoop.main.run() }
+        return 0
+    }
+
     /// Prints the key events around the Globe key for `seconds`, to study how macOS
     /// treats it. Ordinary keys are reported only as "other", never by key code.
     static func census(seconds: Int) -> Int32 {

@@ -4,7 +4,7 @@ import { IPC, type CaptureCommand } from '@shared/ipc'
 import { wordErrorRate } from '@shared/wer'
 import type { Dictation } from './dictation/wire-dictation'
 import type { MachineEvent } from './hotkeys/session-machine'
-import type { SettingsStore } from './store/settings'
+import type { SettingsPatch } from './store/settings'
 import type { SttHost } from './stt/stt-host'
 import { createHubWindow } from './windows/hub-window'
 import { isOverlayInteractive } from './windows/overlay-window'
@@ -29,6 +29,8 @@ import type { AppTray } from './windows/tray'
  *   lose-microphone                      end the recording as an unplugged microphone would
  *   unload-model                         free the model, as the idle timer does
  *   download-model                       what the setup window's Download button does
+ *   cancel-download                      what its Cancel button does
+ *   repair-model                         what its "Check the model files" button does
  *   text-delay <ms>                      hold every session in "processing" this much longer
  *   fail-next-transcript                 make the next decode fail, with the recording kept
  *   max-recording <ms>                   a shorter recording limit
@@ -41,6 +43,7 @@ import type { AppTray } from './windows/tray'
  *   mode <verbatim|cleaned>              what the tray's Mode menu does
  *   ollama-url <url>                     where Cleaned mode looks for Ollama
  *   cleanup-model <name|none>            the model Cleaned mode uses
+ *   approach-tray                        what moving the pointer onto the menu-bar icon does
  *   capture-pill <png path>              save a picture of the pill as it looks right now
  *   capture-hub <png path>               save a picture of the setup window, without showing it
  *   capture-tray <png path>              save a picture of the menu-bar icon
@@ -52,11 +55,12 @@ export function startDebugControl(parts: {
   stt: SttHost
   overlay: BrowserWindow
   tray: AppTray
-  settings: SettingsStore
+  changeSettings(patch: SettingsPatch): boolean
   chooseMicrophone(deviceId: string | null): void
   setMode(mode: 'verbatim' | 'cleaned'): void
   setEvaluationRecording(on: boolean): void
   refreshCleanupStatus(): void
+  trayApproached(): void
 }): void {
   const { dictation, stt, overlay, tray } = parts
   const { controller, speech, debug } = dictation
@@ -108,6 +112,11 @@ export function startDebugControl(parts: {
       case 'download-model':
         void speech.downloadModel()
         return
+      case 'cancel-download':
+        return speech.cancelDownload()
+      case 'repair-model':
+        void speech.repairModel()
+        return
       case 'fail-next-transcript':
         debug.failNextTranscript = true
         return
@@ -135,11 +144,13 @@ export function startDebugControl(parts: {
       case 'mode':
         return parts.setMode(argument === 'cleaned' ? 'cleaned' : 'verbatim')
       case 'ollama-url':
-        if (argument) parts.settings.update({ ollamaUrl: argument })
+        if (argument) parts.changeSettings({ ollamaUrl: argument })
         return parts.refreshCleanupStatus()
       case 'cleanup-model':
-        parts.settings.update({ cleanupModel: !argument || argument === 'none' ? null : argument })
+        parts.changeSettings({ cleanupModel: !argument || argument === 'none' ? null : argument })
         return parts.refreshCleanupStatus()
+      case 'approach-tray':
+        return parts.trayApproached()
       case 'capture-pill':
         if (argument) void capturePill(argument)
         return
@@ -204,6 +215,9 @@ export function startDebugControl(parts: {
         overlayTakesClicks: isOverlayInteractive(overlay),
         overlayBounds: overlay.getBounds(),
         downloadProgress: speech.downloadProgress,
+        downloadError: speech.downloadError,
+        // Whether the model's files are on disk and vouched for, as the setup window is told.
+        modelDownloaded: await speech.modelDownloaded(),
         pastes,
         recovery: controller.recovery.list().map((entry) => ({
           session: entry.sessionId,

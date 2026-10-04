@@ -37,4 +37,4 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
   extendInfo:
-    NSMicrophoneUsageDescription: Whisper Flow listens only while you hold the dictation key. Audio stays on this Mac.
+    NSMicrophoneUsageDescription: Whisper Flow listens only while you are dictating, which is while you hold the dictation key or until you stop a hands-free dictation. Audio stays on this Mac.

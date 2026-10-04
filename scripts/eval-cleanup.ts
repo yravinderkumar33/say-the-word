@@ -24,7 +24,7 @@ import { OllamaClient } from '../src/main/cleanup/ollama-client'
 import { CLEANUP_CEILING_MS, Refiner, type Refined } from '../src/main/cleanup/refiner'
 import { loadParakeet } from '../src/main/stt/engines/sherpa-parakeet'
 import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { isModelReady, modelDir } from '../src/main/stt/model-store'
+import { adoptModel, modelDir } from '../src/main/stt/model-store'
 import { modelsRoot } from '../src/main/stt/models-dir'
 import { Transcriber, type TranscriberEvent } from '../src/main/stt/transcriber'
 import { VoiceDetector } from '../src/main/stt/vad'
@@ -72,7 +72,7 @@ async function loadDictations(): Promise<Item[]> {
   if (names.length === 0) return []
 
   const root = modelsRoot()
-  if (!(await isModelReady(root, DEFAULT_MODEL))) {
+  if (!(await adoptModel(root, DEFAULT_MODEL)).ready) {
     throw new Error('The speech model is not downloaded. Run: npm run models:download')
   }
   const speech = modelDir(root, DEFAULT_MODEL)

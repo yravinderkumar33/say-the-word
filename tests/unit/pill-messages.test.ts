@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { describeNotice, pillMessage } from '../../src/main/dictation/pill-messages'
+import {
+  clipboardMessage,
+  describeNotice,
+  pillMessage,
+} from '../../src/main/dictation/pill-messages'
 import type { Notice } from '../../src/main/dictation/session-controller'
 
 const withText = (): boolean => true
@@ -10,6 +14,7 @@ describe('pillMessage', () => {
     const kept: Notice[] = [
       { kind: 'targetChanged', sessionId: 1 },
       { kind: 'secureField', sessionId: 1 },
+      { kind: 'secureField', sessionId: 1, because: 'secureInput' },
       { kind: 'interrupted', sessionId: 1, hasText: true },
     ]
     for (const notice of kept) {
@@ -18,6 +23,17 @@ describe('pillMessage', () => {
         sound: true,
       })
     }
+  })
+
+  it('calls a field a password field only when the field itself says so', () => {
+    const byRole = pillMessage({ kind: 'secureField', sessionId: 1 }, withText)
+    const bySecureInput = pillMessage(
+      { kind: 'secureField', sessionId: 1, because: 'secureInput' },
+      withText,
+    )
+
+    expect(byRole?.message).toBe('Password field: nothing was pasted')
+    expect(bySecureInput?.message).toBe('Secure Input is on: nothing was pasted')
   })
 
   it('offers Copy after a failure only if the text survived it', () => {
@@ -87,6 +103,7 @@ describe('pillMessage', () => {
       { kind: 'noSpeech', sessionId: 1 },
       { kind: 'targetChanged', sessionId: 1 },
       { kind: 'secureField', sessionId: 1 },
+      { kind: 'secureField', sessionId: 1, because: 'secureInput' },
       { kind: 'pasteFailed', sessionId: 1 },
       { kind: 'nothingToPaste' },
       { kind: 'copied' },
@@ -141,5 +158,27 @@ describe('describeNotice', () => {
     ).toBe('failed (session 3): No microphone was found')
     expect(describeNotice({ kind: 'noSpeech', sessionId: 3 })).toBe('noSpeech (session 3)')
     expect(describeNotice({ kind: 'copied' })).toBe('copied')
+  })
+})
+
+describe('clipboardMessage', () => {
+  it('says so, quietly, when the clipboard could not be kept through a paste', () => {
+    expect(clipboardMessage('notSaved')).toEqual({
+      message: 'The clipboard now holds this dictation',
+      canCopy: false,
+      sound: false,
+    })
+    expect(clipboardMessage('failed')).toMatchObject({ sound: false, canCopy: false })
+  })
+
+  it('says nothing when the user copied something after the paste, or nothing went wrong', () => {
+    expect(clipboardMessage('copiedSince')).toBeNull()
+    expect(clipboardMessage(undefined)).toBeNull()
+  })
+
+  it('keeps its messages short enough for the pill', () => {
+    for (const reason of ['notSaved', 'failed']) {
+      expect(clipboardMessage(reason)!.message.length, reason).toBeLessThanOrEqual(40)
+    }
   })
 })

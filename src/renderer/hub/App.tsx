@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { AppStatus } from '@shared/ipc'
+import { modelStep, type ModelAction } from './model-step'
 
 const POLL_MS = 1_500
 
@@ -16,8 +17,9 @@ export function App() {
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Whisper Flow</h1>
         <p className="mt-1 text-sm text-neutral-500">
-          Hold <Key>Fn</Key>, speak, and release. The text is typed where your cursor is. Everything
-          runs on this Mac.
+          Hold <Key>Fn</Key>, speak, and release. The text is typed where your cursor is. For a
+          longer dictation, press <Key>Fn</Key> twice or <Key>Fn</Key> + <Key>Space</Key>, speak
+          with your hands free, and press <Key>Fn</Key> again to stop. Everything runs on this Mac.
         </p>
       </header>
 
@@ -25,6 +27,7 @@ export function App() {
 
       {status && (
         <>
+          {status.savingDictations && <SavingNotice />}
           <Readiness status={status} />
           <ol className="flex flex-col gap-3">
             <AccessibilityStep status={status} />
@@ -93,6 +96,29 @@ function Readiness({ status }: { status: AppStatus }) {
   )
 }
 
+/**
+ * Shown for as long as dictations are being written to disk. It is the one setting
+ * that keeps what was said, so it is said here in full, with the way to end it.
+ */
+function SavingNotice() {
+  return (
+    <div
+      role="status"
+      className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
+    >
+      <p className="font-medium">Every dictation is being saved</p>
+      <p className="mt-1">
+        The recording and its text are written to a folder on this Mac, for checking how well the
+        recognizer does. They stay there until you delete them (menu-bar menu → Evaluation → Show
+        saved dictations).
+      </p>
+      <div className="mt-3">
+        <Button onClick={() => void window.flowHub.stopSavingDictations()}>Stop saving</Button>
+      </div>
+    </div>
+  )
+}
+
 function AccessibilityStep({ status }: { status: AppStatus }) {
   const { helper } = status
   const done = helper.accessibilityTrusted === true
@@ -139,8 +165,9 @@ function MicrophoneStep({ status }: { status: AppStatus }) {
         )
       }
     >
-      Used only while you hold the dictation key. Audio is turned into text on this Mac and is not
-      stored.
+      On only while you dictate: while you hold the key, or from the start of a hands-free dictation
+      until you stop it. Audio is turned into text on this Mac and is not kept afterwards, unless
+      you switch on “Save every dictation” in the menu-bar menu.
       {!status.packaged && <DevelopmentNote />}
     </Step>
   )
@@ -148,30 +175,28 @@ function MicrophoneStep({ status }: { status: AppStatus }) {
 
 function ModelStep({ status }: { status: AppStatus }) {
   const { speech } = status
+  const view = modelStep(speech)
   const megabytes = Math.round(speech.modelBytes / 1_000_000)
-  const downloading = speech.downloadProgress !== null
+  const buttons: Record<ModelAction, ReactNode> = {
+    download: (
+      <Button onClick={() => void window.flowHub.downloadModel()}>Download ({megabytes} MB)</Button>
+    ),
+    tryAgain: <Button onClick={() => void window.flowHub.downloadModel()}>Try again</Button>,
+    cancel: <Button onClick={() => void window.flowHub.cancelDownload()}>Cancel</Button>,
+    checkFiles: (
+      <Button onClick={() => void window.flowHub.repairModel()}>Check the model files</Button>
+    ),
+  }
   return (
     <Step
       title="Speech model"
-      done={speech.modelDownloaded && speech.state !== 'modelMissing'}
-      state={
-        speech.modelDownloaded
-          ? SPEECH_STATE[speech.state]
-          : downloading
-            ? `Downloading, ${Math.floor((speech.downloadProgress ?? 0) * 100)}%`
-            : 'Not downloaded'
-      }
-      action={
-        speech.modelDownloaded || downloading ? null : (
-          <Button onClick={() => void window.flowHub.downloadModel()}>
-            {speech.downloadError ? 'Try again' : `Download (${megabytes} MB)`}
-          </Button>
-        )
-      }
+      done={view.done}
+      state={view.state}
+      action={view.action ? buttons[view.action] : null}
     >
       {speech.modelLabel} turns speech into text. It is downloaded once; after that, dictation works
       without a network connection.
-      {downloading && (
+      {view.action === 'cancel' && (
         <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
           <div
             className="h-full rounded-full bg-neutral-900 transition-[width] duration-500 dark:bg-neutral-100"
@@ -179,23 +204,19 @@ function ModelStep({ status }: { status: AppStatus }) {
           />
         </div>
       )}
-      {speech.downloadError && (
+      {view.wouldNotStart && (
+        <span className="mt-2 block text-red-600">
+          The model is on this Mac but could not be started. Checking its files finds any that are
+          damaged and downloads those again.
+        </span>
+      )}
+      {speech.downloadError && view.action !== 'cancel' && (
         <span className="mt-2 block text-red-600">
           The download stopped: {speech.downloadError}. What was downloaded is kept.
         </span>
       )}
     </Step>
   )
-}
-
-const SPEECH_STATE: Record<AppStatus['speech']['state'], string> = {
-  ready: 'Downloaded and loaded',
-  // The model is unloaded after a while without dictation and loaded again when needed.
-  stopped: 'Downloaded',
-  loading: 'Loading…',
-  // Shown only while the files are on disk and the app is about to take them in.
-  modelMissing: 'Downloaded, loading…',
-  failed: 'Could not start',
 }
 
 function Step(props: {

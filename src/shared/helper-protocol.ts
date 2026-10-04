@@ -8,7 +8,7 @@ import { z } from 'zod'
  */
 
 /** Bumped whenever a message changes shape; the helper reports its own in `ready`. */
-export const HELPER_PROTOCOL_VERSION = 2
+export const HELPER_PROTOCOL_VERSION = 3
 
 // --- Messages the helper sends on its own -------------------------------------------
 
@@ -47,8 +47,14 @@ const tapStateSchema = z.object({
 const pasteSettledSchema = z.object({
   type: z.literal('pasteSettled'),
   pasteId: z.number().int(),
-  /** False when the user copied something newer, or the clipboard was too large to save. */
+  /** True when what was on the clipboard before the paste is on it again. */
   restored: z.boolean(),
+  /**
+   * Why it is not: `copiedSince` (the user copied something after the paste, and keeps
+   * it), `notSaved` (the clipboard could not be copied whole, so the pasted text is
+   * still on it) or `failed` (the pasteboard would not take the copy back).
+   */
+  reason: z.string().optional(),
 })
 
 export const helperEventSchema = z.discriminatedUnion('type', [
@@ -83,7 +89,7 @@ export const targetResultSchema = z.object({
   secure: z.boolean(),
   /** What marked the field as a password field: `element` or `secureInput`. */
   secureReason: z.string().optional(),
-  /** Secure Event Input is on but was ignored: it has been on too long to be a password field. */
+  /** Secure Event Input is on but was ignored: the app kept it on while it was not in front. */
   secureInputStuck: z.boolean().optional(),
   hasElement: z.boolean(),
   hasWindow: z.boolean().optional(),
@@ -92,14 +98,25 @@ export const targetResultSchema = z.object({
 })
 export type TargetResult = z.infer<typeof targetResultSchema>
 
-export const pasteOutcomeSchema = z.enum(['pasted', 'targetChanged', 'secureField', 'noPostAccess'])
+/**
+ * `expired`: the helper got to the paste, or got back from reading the clipboard, after
+ * the time the request said the app would stop waiting. Nothing was pasted.
+ */
+export const pasteOutcomeSchema = z.enum([
+  'pasted',
+  'targetChanged',
+  'secureField',
+  'noPostAccess',
+  'expired',
+])
 export type PasteOutcome = z.infer<typeof pasteOutcomeSchema>
 export const pasteResultSchema = z.object({
   outcome: pasteOutcomeSchema,
   /**
    * Why a paste was refused. `targetChanged`: which part of the destination differs
    * (app, window, element…). `secureField`: what marked it as one. `noPostAccess`:
-   * what the permission checks said. Never anything about the text.
+   * what the permission checks said. `expired`: where the time ran out. Never anything
+   * about the text.
    */
   detail: z.string().optional(),
 })

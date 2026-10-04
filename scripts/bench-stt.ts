@@ -12,7 +12,7 @@ import { decodeWav } from '../src/shared/wav'
 import { wordErrorRate } from '../src/shared/wer'
 import { loadParakeet } from '../src/main/stt/engines/sherpa-parakeet'
 import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { isModelReady, modelDir } from '../src/main/stt/model-store'
+import { adoptModel, modelDir } from '../src/main/stt/model-store'
 import { modelsRoot } from '../src/main/stt/models-dir'
 
 const megabytes = (bytes: number): string => (bytes / 1_048_576).toFixed(0)
@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   const threadsFlag = process.argv.indexOf('--threads')
   const threads = threadsFlag === -1 ? 4 : Number(process.argv[threadsFlag + 1])
   const root = modelsRoot()
-  if (!(await isModelReady(root, DEFAULT_MODEL))) {
+  if (!(await adoptModel(root, DEFAULT_MODEL)).ready) {
     throw new Error('The speech model is not downloaded. Run: npm run models:download')
   }
 

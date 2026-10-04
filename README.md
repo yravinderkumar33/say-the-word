@@ -4,7 +4,9 @@ Local-first dictation for macOS: hold a key, speak, and the text lands where you
 
 It is an open-source take on the Wispr Flow interaction model (same shortcuts, same hold-to-talk feel) built with Electron and TypeScript, one small Swift helper, a local speech recognizer, and Ollama for optional cleanup.
 
-**Status:** early development. Dictation works end to end: hold `Fn`, speak, release, and the text is pasted where you were typing. Two modes, chosen in the menu-bar menu: Verbatim (the recognizer's text) and Cleaned (tidied by a local Ollama model, behind a guard that falls back to a rules-only text). Hands-free mode and the full settings window are not built yet. See [`docs/tracker.md`](docs/tracker.md) for what is done and what is next.
+**Status:** early development. Dictation works end to end: hold `Fn`, speak, release, and the text is pasted where you were typing. Hands-free dictation works too: press `Fn` twice, press `Fn`+`Space`, or click the pill, speak with no key held, and press `Fn` again to stop. `Esc` cancels, and `Cmd`+`Ctrl`+`V` pastes the last dictation again. Two modes, chosen in the menu-bar menu: Verbatim (the recognizer's text) and Cleaned (tidied by a local Ollama model, behind a guard that falls back to a rules-only text). The full settings window, the dictionary editor and a searchable history are not built yet. See [`docs/tracker.md`](docs/tracker.md) for what is done and what is next.
+
+**What is kept:** the microphone is on only while you dictate. Audio is turned into text on this Mac. The recording is held in memory until the dictation is over (a few seconds longer after a cancel or a failure, so that it can be undone or tried again) and is never written to disk; the last few texts are held in memory, for pasting again, until the app quits. The one exception is of your own choosing: "Save every dictation" in the menu-bar menu (Evaluation) writes each recording and its text to a folder on this Mac, so that the recognizer can be scored on your own voice. It is off unless you switch it on, and the setup window says so for as long as it is on.
 
 ## Requirements
 
@@ -52,6 +54,10 @@ The app tests also need the test recordings: `npm run fixtures` generates them w
 ## When a dictation does not arrive
 
 The pill says why in a few words. The rest is in the log: menu-bar icon → **Show Log**, or `~/Library/Logs/Whisper Flow/main.log`. Each dictation leaves the shortcut events, the app the text was meant for, whether it was pasted and, if not, which check refused it, and how loud the recording was. It never contains what you said.
+
+Whatever the reason, the text is not lost: the pill offers Copy, and `Cmd`+`Ctrl`+`V` pastes the last dictation where the cursor is.
+
+**"Secure Input is on: nothing was pasted"** means macOS reports that the app in front is taking a password, and the app does not show which of its fields has the keyboard (browsers and Electron apps often do not). If the cursor is in a password field, that is the protection doing its job. If it is not, macOS or the app has left Secure Input switched on. Bring another app to the front for a few seconds and come back: the app has then been seen to keep Secure Input on while it was not in use, which a password field does not do, and dictation into it works again.
 
 ## Layout
 

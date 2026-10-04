@@ -33,7 +33,7 @@ import {
 } from '../src/shared/wer'
 import { loadParakeet } from '../src/main/stt/engines/sherpa-parakeet'
 import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { isModelReady, modelDir } from '../src/main/stt/model-store'
+import { adoptModel, modelDir } from '../src/main/stt/model-store'
 import { modelsRoot } from '../src/main/stt/models-dir'
 import { Transcriber, type TranscriberEvent } from '../src/main/stt/transcriber'
 import { VoiceDetector } from '../src/main/stt/vad'
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
   }
 
   const root = modelsRoot()
-  if (!(await isModelReady(root, DEFAULT_MODEL))) {
+  if (!(await adoptModel(root, DEFAULT_MODEL)).ready) {
     throw new Error('The speech model is not downloaded. Run: npm run models:download')
   }
   const model = modelDir(root, DEFAULT_MODEL)

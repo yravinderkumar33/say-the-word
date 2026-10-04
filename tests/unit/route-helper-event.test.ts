@@ -87,6 +87,14 @@ describe('describeHelperEvent', () => {
     expect(describeHelperEvent({ type: 'pasteSettled', pasteId: 3, restored: true })).toBe(
       '[paste] clipboard put back',
     )
+    expect(
+      describeHelperEvent({
+        type: 'pasteSettled',
+        pasteId: 3,
+        restored: false,
+        reason: 'notSaved',
+      }),
+    ).toBe('[paste] clipboard left as it is (notSaved)')
     expect(describeHelperEvent({ type: 'pasteSettled', pasteId: 3, restored: false })).toBe(
       '[paste] clipboard left as it is',
     )

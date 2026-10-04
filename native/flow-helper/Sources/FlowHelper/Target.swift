@@ -14,8 +14,8 @@ struct TargetSnapshot {
     /// Why the focused element counts as a password field (`element` or `secureInput`),
     /// or nil when it does not.
     let secureReason: String?
-    /// True when Secure Event Input was ignored because it has been on for too long to
-    /// be a password field.
+    /// Diagnostic history: this holder was seen keeping Secure Event Input on while
+    /// another app was in front. It never overrides the current field's secure reason.
     let secureInputStuck: Bool
 
     var secure: Bool { secureReason != nil }
@@ -65,8 +65,23 @@ final class TargetStore {
     ///
     /// App and window must match. The focused element must match when both snapshots
     /// have one; a snapshot without an element is compared on app and window alone.
-    func compare(targetId: Int) -> TargetComparison {
+    ///
+    /// Whether the recorded app is still in front is asked of the app itself, every
+    /// time. `NSWorkspace` learns which app is in front only when the helper's run loop
+    /// turns: on 2026-10-04 it named Safari a second and a half after Finder had come
+    /// forward, while the helper was busy with a slow clipboard. The app's own answer is
+    /// true at the moment it is given.
+    ///
+    /// If the app does not answer: after a wait (`afterWait`) there is nothing else to
+    /// go by, and the paste is refused; otherwise what `NSWorkspace` says, which is
+    /// fresh at the start of a request, decides as it used to.
+    func compare(targetId: Int, afterWait: Bool = false) -> TargetComparison {
         guard let saved = snapshots[targetId] else { return .changed("unknownTarget") }
+        switch isFrontmost(saved.pid) {
+        case true?: break
+        case false?: return .changed("app")
+        case nil: if afterWait { return .changed("appNotAnswering") }
+        }
         guard let now = current() else { return .changed("nothingFrontmost") }
         if let reason = now.secureReason { return .secure(reason) }
         guard now.pid == saved.pid else { return .changed("app") }
@@ -99,19 +114,19 @@ final class TargetStore {
         let window = element.flatMap { copyElement($0, kAXWindowAttribute) }
             ?? copyElement(app, kAXFocusedWindowAttribute)
 
-        let held = secureInput.state()
+        let held = secureInput.sample(frontmost: pid, bundleId: bundleId)
         let secureReason = SecureFieldPolicy.reason(
             elementIsSecure: element.map(isSecureField) ?? false,
             secureInputEnabled: held != nil,
             secureInputHolderPid: held?.holder,
-            secureInputHeldFor: held?.heldFor ?? 0,
+            secureInputLeftOn: held?.leftOn ?? false,
             frontmostPid: pid,
             bundleId: bundleId
         )
         let stuck = SecureFieldPolicy.isStuck(
             secureInputEnabled: held != nil,
             secureInputHolderPid: held?.holder,
-            secureInputHeldFor: held?.heldFor ?? 0,
+            secureInputLeftOn: held?.leftOn ?? false,
             frontmostPid: pid
         )
         return TargetSnapshot(
@@ -122,6 +137,18 @@ final class TargetStore {
             secureReason: secureReason,
             secureInputStuck: stuck
         )
+    }
+
+    /// Whether the app is in front, as the app itself says (its `AXFrontmost`). Unlike
+    /// `NSWorkspace`, this does not depend on the helper's run loop having turned. Nil
+    /// when the app does not answer in time.
+    func isFrontmost(_ pid: pid_t) -> Bool? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, Self.messagingTimeout)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXFrontmostAttribute as CFString, &value) == .success
+        else { return nil }
+        return value as? Bool
     }
 
     /// The app's bundle id. Launch Services has been seen to answer nothing for an app

@@ -3,7 +3,7 @@ import { IPC, captureEventSchema, type CaptureCommand, type SpeechState } from '
 import type { TranscriptEvent } from '@shared/stt-protocol'
 import { listenFromOwnPages } from '../security'
 import { DEFAULT_MODEL, type ModelSpec } from '../stt/model-catalog'
-import { downloadModel, isModelReady, modelDir } from '../stt/model-store'
+import { adoptModel, downloadModel, isModelReady, modelDir, verifyModel } from '../stt/model-store'
 import { WorkerLostError, type SttHost } from '../stt/stt-host'
 import type { EvaluationRecorder } from './evaluation-recorder'
 import { RecordingGoneError, type ProducedText, type SessionHandle } from './session-controller'
@@ -65,7 +65,14 @@ export class SpeechService {
   readonly model: ModelSpec
   private current: SpeechState = 'stopped'
   private loading: Promise<SpeechState> | null = null
-  private download: { progress: number; error: string | null } | null = null
+  private download: { progress: number; error: string | null; cancel: AbortController } | null =
+    null
+  /**
+   * True once the model's files have been read and checked after a load that failed,
+   * so that a model that keeps failing is not read again each time. A load that works
+   * clears it.
+   */
+  private checkedAfterFailure = false
   private crashes = 0
   private quitting = false
   private idleTimer: NodeJS.Timeout | null = null
@@ -131,6 +138,7 @@ export class SpeechService {
     return this.download?.error ?? null
   }
 
+  /** Whether the model's files are on disk and vouched for. Cheap: it reads no file. */
   modelDownloaded(): Promise<boolean> {
     return isModelReady(this.deps.modelsRoot, this.model)
   }
@@ -144,23 +152,69 @@ export class SpeechService {
     return this.loading
   }
 
-  /** Downloads the model, then loads it. Progress is visible through `downloadProgress`. */
+  /**
+   * Downloads the model, then loads it. Progress is visible through `downloadProgress`.
+   * Files that are already there and intact are not fetched again, so this is also how
+   * a damaged model is repaired.
+   */
   async downloadModel(): Promise<void> {
     if (this.download && !this.download.error) return
-    const download = { progress: 0, error: null as string | null }
+    const download = { progress: 0, error: null as string | null, cancel: new AbortController() }
     this.download = download
     try {
       await downloadModel(this.deps.modelsRoot, this.model, {
+        signal: download.cancel.signal,
         onProgress: ({ overallBytes, overallTotal }) => {
           download.progress = overallBytes / overallTotal
         },
       })
-      this.download = null
+      if (this.download === download) this.download = null
+      this.checkedAfterFailure = false
       await this.prepare()
     } catch (error) {
+      if (download.cancel.signal.aborted) {
+        // Stopped on request: that is not a failure. What arrived is kept for next time.
+        if (this.download === download) this.download = null
+        console.log('[speech] model download cancelled')
+        return
+      }
       download.error = error instanceof Error ? error.message : String(error)
       console.error('[speech] model download failed:', download.error)
     }
+  }
+
+  /** Stops a download that is under way. What has arrived is kept, and resumed next time. */
+  cancelDownload(): void {
+    if (this.download && !this.download.error) this.download.cancel.abort()
+  }
+
+  /**
+   * For a model that is on disk and would not start: reads every file again, fetches
+   * whatever turns out to be damaged or missing, and tries to load it once more.
+   */
+  async repairModel(): Promise<void> {
+    // Only for a model that is not in use. The button that asks for this is drawn from
+    // a status a second or two old: by the time the click arrives the model may be
+    // loaded and a dictation under way, and loading it again would pull it from under it.
+    if (this.current !== 'failed' && this.current !== 'modelMissing') return
+    if (this.loading || (this.download && !this.download.error)) return
+    // Asked for by a person: earlier crashes are not held against the next attempt.
+    this.crashes = 0
+    let intact = false
+    // Held as the load in progress, so that nothing else starts loading meanwhile.
+    this.loading = (async (): Promise<SpeechState> => {
+      this.setState('loading')
+      const check = await verifyModel(this.deps.modelsRoot, this.model).catch(() => null)
+      this.checkedAfterFailure = false
+      intact = check?.ok === true
+      if (intact) return this.load()
+      this.reportDamage(check)
+      return this.setState('modelMissing')
+    })().finally(() => {
+      this.loading = null
+    })
+    await this.loading
+    if (!intact) await this.downloadModel()
   }
 
   startRecording(session: SessionHandle): void {
@@ -259,8 +313,9 @@ export class SpeechService {
       if (result.lostFrames > 0) {
         console.error(`[speech] session ${session.id}: ${result.lostFrames} audio frames were lost`)
       }
-      // The text has arrived: the overlay need not hold the recording any longer.
-      this.forget(session.id)
+      // The recording stays held in the overlay. The session is not over yet (the
+      // text is still to be cleaned and pasted), and a cancel from here on can be
+      // taken back only with the recording. The controller lets it go: `forget`.
       if (result.noSpeech || result.text.length === 0) return null
       try {
         recorder?.saveText(session.id, result.text)
@@ -274,7 +329,7 @@ export class SpeechService {
       return { raw: result.text, final: result.text }
     } finally {
       this.inHand.delete(session.id)
-      // After a failure or a cancel the recording stays held, for Retry or Undo.
+      // The recording may be asked for again (Retry, Undo): the model stays loaded.
       this.keepLoaded()
     }
   }
@@ -303,7 +358,13 @@ export class SpeechService {
   private async load(): Promise<SpeechState> {
     this.setState('loading')
     try {
-      if (!(await this.modelDownloaded())) return this.setState('modelMissing')
+      // Files that nothing vouches for (changed since they were checked, copied in, or
+      // left by an older version) are read and checked here, once, before they are used.
+      const adoption = await adoptModel(this.deps.modelsRoot, this.model)
+      if (!adoption.ready) {
+        this.reportDamage(adoption.check)
+        return this.setState('modelMissing')
+      }
       await this.deps.stt.start()
       const { loadMs } = await this.deps.stt.load(
         modelDir(this.deps.modelsRoot, this.model),
@@ -312,12 +373,41 @@ export class SpeechService {
       // Only now can the worker take audio, so only now does the overlay get its port.
       this.deps.stt.connectRenderer(this.deps.overlay.webContents)
       console.log(`[speech] model loaded in ${loadMs.toFixed(0)} ms`)
+      this.checkedAfterFailure = false
       this.keepLoaded()
       return this.setState('ready')
     } catch (error) {
       console.error('[speech] could not start:', error instanceof Error ? error.message : error)
+      if (await this.damagedFilesFound()) return this.setState('modelMissing')
       // A worker lost mid-load has already been reported, and is being restarted.
       return error instanceof WorkerLostError ? this.current : this.setState('failed')
+    }
+  }
+
+  /**
+   * After a load that failed: were the model's files the reason? They are read and
+   * checked in full, once per run of failures. A file can change without its size or
+   * its date changing, and nothing short of reading it shows that. Damaged files are
+   * removed, which makes the model "not downloaded" again, and downloading it repairs it.
+   */
+  private async damagedFilesFound(): Promise<boolean> {
+    if (this.checkedAfterFailure) return false
+    this.checkedAfterFailure = true
+    const check = await verifyModel(this.deps.modelsRoot, this.model).catch(() => null)
+    if (!check || check.ok) return false
+    this.reportDamage(check)
+    return true
+  }
+
+  private reportDamage(check: { missing: string[]; damaged: string[] } | null): void {
+    if (!check) return
+    if (check.damaged.length > 0) {
+      console.error(
+        `[speech] model files did not match their checksums and were removed: ${check.damaged.join(', ')}`,
+      )
+    }
+    if (check.missing.length > 0) {
+      console.error(`[speech] model files are missing: ${check.missing.join(', ')}`)
     }
   }
 

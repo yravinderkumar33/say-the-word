@@ -20,7 +20,8 @@ export function describeHelperEvent(event: HelperEvent): string {
         ? `[key] macOS switched the key tap off; it is back on (${event.reason})`
         : `[key] the key tap was taken down (${event.reason})`
     case 'pasteSettled':
-      return `[paste] clipboard ${event.restored ? 'put back' : 'left as it is'}`
+      if (event.restored) return '[paste] clipboard put back'
+      return `[paste] clipboard left as it is${event.reason ? ` (${event.reason})` : ''}`
   }
 }
 
@@ -32,7 +33,7 @@ export function describeTarget(target: TargetResult): string {
   const secure = target.secure
     ? (target.secureReason ?? 'yes')
     : target.secureInputStuck
-      ? 'no (Secure Input is stuck on, ignored)'
+      ? 'no (background Secure Input observed)'
       : 'no'
   // An app with no bundle id is rare enough that its name is worth having.
   const app = target.bundleId ?? `unknown (${target.appName ?? 'no name'})`

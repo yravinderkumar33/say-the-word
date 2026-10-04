@@ -66,6 +66,11 @@ export class PillPresenter {
     this.push()
   }
 
+  /** True while a message is on the pill. */
+  get showsRecovery(): boolean {
+    return this.recovery !== null
+  }
+
   dismissRecovery(): void {
     if (!this.recovery) return
     this.clearRecovery()

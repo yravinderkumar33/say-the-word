@@ -23,6 +23,8 @@ interface ActiveCapture {
   flushed: (() => void) | null
   /** Ends this capture's listeners on the microphone track when it is let go. */
   listeners: AbortController
+  /** True once the main process has said the recording is not needed, while it is still being wound up. */
+  released: boolean
 }
 
 /** Microphone streams that are open right now. Zero means the microphone is released. */
@@ -116,6 +118,7 @@ export class MicCapture {
       stopping: false,
       flushed: null,
       listeners: new AbortController(),
+      released: false,
     }
     this.active = capture
 
@@ -198,9 +201,15 @@ export class MicCapture {
     return this.finished !== null
   }
 
-  /** The session's text has arrived: its audio is no longer needed. */
+  /**
+   * The session is over: its audio is no longer needed. That can be said while the
+   * recording is still being wound up (a session that failed the moment the key was let
+   * go, for one): it is then let go as soon as the winding up is done, not held until
+   * the next dictation.
+   */
   forget(session: number): void {
     if (this.finished?.session === session) this.finished = null
+    else if (this.active?.session === session) this.active.released = true
   }
 
   /** Tests only: behaves as if the microphone had been unplugged. */
@@ -282,7 +291,7 @@ export class MicCapture {
     this.release(capture)
     this.active = null
     this.rest()
-    this.finished = { session: capture.session, frames }
+    this.finished = capture.released ? null : { session: capture.session, frames }
     this.awaitingText = true
     this.post({ t: 'end', session: capture.session, frames: frames.length })
     this.callbacks.onLevel(0)

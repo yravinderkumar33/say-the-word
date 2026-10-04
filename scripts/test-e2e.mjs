@@ -7,7 +7,8 @@
 // keyboard and mouse alone while it runs. Everything that can be tested without
 // doing that is in `npm run test:app` instead.
 //
-// Two safeguards keep it from typing into another app if focus moves anyway:
+// What keeps it out of the way of someone who is using the Mac:
+//   - it does not start while a call, a video or a recording is on;
 //   - the app is started so that it refuses to paste into anything but TextEdit;
 //   - before every synthetic key press the test confirms TextEdit is still frontmost,
 //     and stops if it is not.
@@ -15,14 +16,15 @@
 //   npm run test:e2e                       against the built output, run by Electron
 //   npm run test:e2e -- --packaged          against the packaged app in dist/
 //   npm run test:e2e -- --only "focus"      only the checks whose name contains the text
-//   npm run test:e2e -- --when-idle 30      start once nobody has touched the Mac for 30 s
+//   npm run test:e2e -- --when-idle 120     start once nobody has touched the Mac for 120 s
+//   npm run test:e2e -- --even-if-in-use    run although a call or a video is on
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { waitForIdle } from './lib/wait-idle.mjs'
+import { mayTakeTheKeyboard } from './lib/mac-in-use.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const helperPath = join(root, 'resources', 'bin', 'flow-helper')
@@ -34,6 +36,7 @@ const option = (name) => {
 }
 const only = option('--only')
 const whenIdle = Number(option('--when-idle') ?? 0)
+const evenIfInUse = process.argv.includes('--even-if-in-use')
 // Started directly rather than with `open`, so macOS attributes the Accessibility
 // permission to the terminal running this test, which already holds it.
 const packagedBinary = join(
@@ -141,10 +144,7 @@ if (spawnSync('pgrep', ['-x', 'TextEdit']).status === 0) {
   process.exit(77)
 }
 
-if (whenIdle > 0 && !(await waitForIdle(whenIdle, 15 * 60_000))) {
-  console.log('  skip everything: the Mac was in use the whole time.')
-  process.exit(77)
-}
+if (!(await mayTakeTheKeyboard({ idleFor: whenIdle, evenIfInUse }))) process.exit(77)
 
 const scratch = mkdtempSync(join(tmpdir(), 'flow-e2e-'))
 let log = ''
@@ -238,7 +238,9 @@ try {
       control('text-delay 2500')
       postKeys(dictateChord)
       // The destination was TextEdit when the key was released. Now another app comes
-      // forward while the text is still being prepared.
+      // forward while the text is still being prepared. (Only from TextEdit: Finder is
+      // not put over an app somebody has just brought forward.)
+      documentText()
       spawnSync('open', ['-a', 'Finder'])
       await sleep(3_500)
       control('text-delay 0')
@@ -247,6 +249,11 @@ try {
         'the app did not refuse the paste',
       )
 
+      // Back to the document, unless someone has brought an app of their own forward.
+      const front = focused().bundleId
+      if (front !== 'com.apple.finder' && front !== TEXTEDIT) {
+        throw new FocusLost(`focus moved to ${front || 'another app'}; stopped posting keys`)
+      }
       spawnSync('open', ['-a', 'TextEdit'])
       await waitForDocument()
       await sleep(400)

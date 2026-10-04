@@ -455,6 +455,40 @@ describe('MicCapture', () => {
       expect(t.events.map((event) => event.kind)).not.toContain('gone')
     })
 
+    it('lets go of a recording that was released while it was still being wound up', async () => {
+      const t = setup()
+      await t.capture.start(5, null)
+      t.worklet().emit('started')
+      t.worklet().emit(t.frame(0.1))
+      const stopping = t.capture.stop(5)
+
+      // The session failed the moment the key was let go, and said so at once: the
+      // recording is still in its 150 ms tail when it is told it is not needed.
+      t.capture.forget(5)
+      await vi.advanceTimersByTimeAsync(200)
+      await stopping
+
+      // What was captured still went to the worker; nothing is kept here.
+      expect(kinds(t.sent)).toEqual(['pcm', 'end'])
+      expect(t.capture.holdsRecording).toBe(false)
+    })
+
+    it('holds a finished recording that nobody has released', async () => {
+      const t = setup()
+      await t.capture.start(5, null)
+      t.worklet().emit('started')
+      t.worklet().emit(t.frame(0.1))
+      const stopping = t.capture.stop(5)
+      // A release meant for another session changes nothing.
+      t.capture.forget(4)
+      await vi.advanceTimersByTimeAsync(200)
+      await stopping
+
+      expect(t.capture.holdsRecording).toBe(true)
+      t.capture.forget(5)
+      expect(t.capture.holdsRecording).toBe(false)
+    })
+
     it('lets the held recording go when the next session starts', async () => {
       const t = setup()
       await t.capture.start(5, null)

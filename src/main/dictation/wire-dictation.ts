@@ -18,11 +18,11 @@ import { isRecording } from '../hotkeys/session-machine'
 import type { HelperBridge } from '../native/helper-bridge'
 import { listenFromOwnPages } from '../security'
 import type { SettingsStore } from '../store/settings'
-import { modelsRoot } from '../stt/models-dir'
+import { modelToUse, modelsRoot } from '../stt/models-dir'
 import type { SttHost } from '../stt/stt-host'
 import { positionOverlay } from '../windows/overlay-window'
 import { EvaluationRecorder, evaluationDir } from './evaluation-recorder'
-import { describeNotice, pillMessage } from './pill-messages'
+import { clipboardMessage, describeNotice, pillMessage } from './pill-messages'
 import { DEFAULT_PRESENTER_OPTIONS, PillPresenter } from './pill-presenter'
 import {
   SessionController,
@@ -93,6 +93,11 @@ export interface Dictation {
    * mode), and the local models it could use.
    */
   cleanupStatus(): Promise<{ line: string; models: string[] }>
+  /**
+   * Says something on the pill, with the sound that goes with "what you asked for did
+   * not happen". For things outside a dictation, such as a setting that would not save.
+   */
+  tell(message: string): void
   debug: DictationDebug
 }
 
@@ -103,6 +108,7 @@ const CLEANUP_PROBLEMS: Record<Exclude<LocalVerdict, { local: true }>['reason'],
   notInstalled: 'the chosen model is not installed',
   notATextModel: 'the chosen model cannot write text',
   serverNotLocal: 'the Ollama address is not on this Mac',
+  redirected: 'the Ollama address sends requests elsewhere',
   unreachable: 'Ollama is not running',
 }
 
@@ -185,6 +191,7 @@ export function wireDictation(parts: DictationParts): Dictation {
     stt,
     overlay,
     modelsRoot: modelsRoot(),
+    model: modelToUse(),
     microphoneId: () => settings.get().microphoneId,
     maxRecordingMs: () => debug.maxRecordingMs ?? MAX_RECORDING_MS,
     evaluation: () => (settings.get().evaluationRecording ? evaluation : null),
@@ -214,7 +221,11 @@ export function wireDictation(parts: DictationParts): Dictation {
     onLimitSoon: (session) => {
       if (controller.currentSessionId === session) toOverlay(IPC.pillCue, 'limitSoon')
     },
-    onTranscript: (session, result) => metrics.decoded(session, result),
+    onTranscript: (session, result) => {
+      // Marks where recognition ends and cleanup begins, for a session that seems stuck.
+      console.log(`[speech] heard (session ${session})`)
+      metrics.decoded(session, result)
+    },
     onStateChange: (state: SpeechState) => {
       console.log(`[speech] ${state}`)
       onStatusChange()
@@ -360,6 +371,14 @@ export function wireDictation(parts: DictationParts): Dictation {
       setTapInstalled(event.installed)
       if (!event.installed) onTapLost()
     }
+    if (event.type === 'pasteSettled' && !event.restored) {
+      // The paste went through and took the clipboard with it. Said only when the pill
+      // has nothing else to say: a new dictation, or a message about one, comes first.
+      const lost = clipboardMessage(event.reason)
+      if (lost && controller.stateName === 'idle' && !presenter.showsRecovery) {
+        presenter.showRecovery(lost)
+      }
+    }
     const machineEvent = toMachineEvent(event)
     if (machineEvent) controller.dispatch(machineEvent)
   })
@@ -481,7 +500,12 @@ export function wireDictation(parts: DictationParts): Dictation {
   powerMonitor.on('unlock-screen', comeBack('screen lock'))
   powerMonitor.on('user-did-become-active', comeBack('user switch'))
 
-  return { controller, speech, shortcutsActive: () => tapInstalled, cleanupStatus, debug }
+  const tell = (message: string): void => {
+    console.log(`[app] ${message}`)
+    presenter.showRecovery({ message, canCopy: false, sound: true })
+  }
+
+  return { controller, speech, shortcutsActive: () => tapInstalled, cleanupStatus, tell, debug }
 }
 
 /** Waits, but no longer than the session lives. */

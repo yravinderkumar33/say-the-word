@@ -94,7 +94,9 @@ public struct BindingMatcher: Sendable {
     }
 
     /// While armed, the next Escape press is swallowed whole and reported as `cancel`.
-    /// It disarms itself on that press's key-up, so a stalled app cannot leave Escape dead.
+    /// That press uses the arming up as it goes down, so a stalled app cannot leave
+    /// Escape dead. Its release is still swallowed, whenever it comes, but belongs to
+    /// that press alone: a session armed in the meantime keeps its own Escape.
     public mutating func armEscape(_ armed: Bool) {
         escapeArmed = armed
     }
@@ -125,6 +127,7 @@ public struct BindingMatcher: Sendable {
         }
 
         if keyCode == KeyCode.escape, escapeArmed {
+            escapeArmed = false
             escapeHeld = true
             return MatcherDecision(events: [.cancel], swallow: true)
         }
@@ -151,7 +154,6 @@ public struct BindingMatcher: Sendable {
     public mutating func keyUp(keyCode: Int) -> MatcherDecision {
         if keyCode == KeyCode.escape, escapeHeld {
             escapeHeld = false
-            escapeArmed = false
             return MatcherDecision(swallow: true)
         }
 

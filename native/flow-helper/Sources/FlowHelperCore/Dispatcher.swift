@@ -7,7 +7,11 @@ public protocol HelperActions {
     func armEscape(_ armed: Bool) -> [String: Any]
     func installTap() -> [String: Any]
     func captureTarget() -> [String: Any]
-    func paste(pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int) -> [String: Any]
+    /// `expiresAtMs`: when the app stops waiting for this paste, in milliseconds since
+    /// the epoch. Nothing may be pasted after it.
+    func paste(
+        pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int, expiresAtMs: Double?
+    ) -> [String: Any]
     func checkPermissions() -> [String: Any]
     func promptAccessibility() -> [String: Any]
 }
@@ -93,7 +97,21 @@ public struct Dispatcher {
             guard (0 ... 60_000).contains(delay) else {
                 return .failure(RequestError(message: "paste: restoreDelayMs is out of range"))
             }
-            return .success(actions.paste(pasteId: pasteId, text: text, targetId: targetId, restoreDelayMs: delay))
+            let expiresAtMs: Double?
+            if request["expiresAt"] == nil || request["expiresAt"] is NSNull {
+                expiresAtMs = nil
+            } else if let value = JSONLines.number(request["expiresAt"]) {
+                expiresAtMs = value
+            } else {
+                return .failure(RequestError(message: "paste: expiresAt must be a number"))
+            }
+            return .success(actions.paste(
+                pasteId: pasteId,
+                text: text,
+                targetId: targetId,
+                restoreDelayMs: delay,
+                expiresAtMs: expiresAtMs
+            ))
 
         case "checkPermissions":
             return .success(actions.checkPermissions())
