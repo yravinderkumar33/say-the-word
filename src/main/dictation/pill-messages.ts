@@ -12,9 +12,29 @@ export function pillMessage(
   notice: Notice,
   hasText: (sessionId: number) => boolean,
 ): PillRecovery | null {
-  const quiet = (message: string): PillRecovery => ({ message, canCopy: false, sound: false })
-  const alert = (message: string, canCopy: boolean): PillRecovery => ({
+  const plain = (message: string): PillRecovery => ({
     message,
+    messageKind: 'plain',
+    canCopy: false,
+    sound: false,
+  })
+  // Done as asked: said briefly, and with nothing to press.
+  const confirm = (message: string): PillRecovery => ({
+    message,
+    messageKind: 'confirm',
+    canCopy: false,
+    sound: false,
+  })
+  // The app refused to paste on purpose. The text is safe, and Copy fetches it.
+  const kept = (message: string): PillRecovery => ({
+    message,
+    messageKind: 'protected',
+    canCopy: true,
+    sound: true,
+  })
+  const problem = (message: string, canCopy: boolean): PillRecovery => ({
+    message,
+    messageKind: 'problem',
     canCopy,
     sound: true,
   })
@@ -25,33 +45,53 @@ export function pillMessage(
     case 'cancelled':
       // Paste-last replaced the session on purpose; there is nothing to explain.
       if (notice.reason === 'superseded') return null
-      return { ...quiet('Cancelled'), ...(notice.canUndo ? { redo: 'Undo' as const } : {}) }
+      return { ...plain('Cancelled'), ...(notice.canUndo ? { redo: 'Undo' as const } : {}) }
     case 'interrupted':
       return notice.hasText
-        ? alert('Interrupted. Your text was kept', true)
-        : alert('Dictation was interrupted', false)
+        ? problem('Interrupted. Your text was kept', true)
+        : problem('Dictation was interrupted', false)
     case 'noSpeech':
-      return quiet('No speech heard')
+      return plain('No speech heard')
     case 'targetChanged':
-      return alert('Focus moved, so nothing was pasted', true)
+      return kept('Focus moved, so nothing was pasted')
     case 'secureField':
       // With only Secure Input to go on, the field may or may not be a password field.
       // The message says what is known, and names the thing the user can look up.
       return notice.because === 'secureInput'
-        ? alert('Secure Input is on: nothing was pasted', true)
-        : alert('Password field: nothing was pasted', true)
+        ? kept('Secure Input is on: nothing was pasted')
+        : kept('Password field: nothing was pasted')
     case 'pasteFailed':
-      return alert('Could not paste', hasText(notice.sessionId))
+      return problem('Could not paste', hasText(notice.sessionId))
     case 'failed':
       return {
-        ...alert(plainWords(notice.message), hasText(notice.sessionId)),
+        ...problem(plainWords(notice.message), hasText(notice.sessionId)),
         ...(notice.canRetry ? { redo: 'Retry' as const } : {}),
       }
     case 'nothingToPaste':
-      return quiet('Nothing to paste yet')
+      return confirm('Nothing to paste yet')
     case 'copied':
-      return quiet('Copied')
+      return confirm('Copied')
   }
+}
+
+/** Said when a recording ends by itself. What was captured is used as if the key had been released. */
+export function recordingEndedMessage(reason: 'limit' | 'microphoneLost'): PillRecovery {
+  return {
+    message: reason === 'limit' ? 'Stopped at the 20-minute limit' : 'The microphone disconnected',
+    messageKind: 'problem',
+    canCopy: false,
+    sound: true,
+    stoppedAtLimit: reason === 'limit',
+  }
+}
+
+/**
+ * Something outside a dictation that the user asked for and did not get, such as a
+ * setting that would not save. Nothing is lost by it, so it is a note; the sound says
+ * that what was asked for did not happen.
+ */
+export function noteMessage(message: string): PillRecovery {
+  return { message, messageKind: 'note', canCopy: false, sound: true }
 }
 
 /**
@@ -63,14 +103,16 @@ export function pillMessage(
  * log said so.
  */
 export function clipboardMessage(reason: string | undefined): PillRecovery | null {
-  if (reason === 'notSaved') {
-    // Too large, too slow, or with a format that could not be read: it was not copied,
-    // and the text that was pasted is what the clipboard holds now.
-    return { message: 'The clipboard now holds this dictation', canCopy: false, sound: false }
-  }
-  if (reason === 'failed') {
-    return { message: 'The clipboard could not be put back', canCopy: false, sound: false }
-  }
+  const note = (message: string): PillRecovery => ({
+    message,
+    messageKind: 'note',
+    canCopy: false,
+    sound: false,
+  })
+  // Too large, too slow, or with a format that could not be read: it was not copied,
+  // and the text that was pasted is what the clipboard holds now.
+  if (reason === 'notSaved') return note('The clipboard now holds this dictation')
+  if (reason === 'failed') return note('The clipboard could not be put back')
   return null
 }
 

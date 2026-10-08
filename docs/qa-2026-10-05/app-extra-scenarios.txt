@@ -1,0 +1,158 @@
+scenario('QA5: Delete Everything must erase recoverable transcript text', async () => {
+  const { session, state } = await dictate(SHORT)
+  expectPastedIntact(state, session)
+  await showPage('privacy', 'Privacy')
+  send('answer-dialogs yes')
+  try {
+    expect((await pressHub('Delete Everything…')) === 'pressed', 'Delete Everything unavailable')
+    const after = await waitUntil('deletion to finish', now =>
+      askedOf(now, 'deleteStored:everything') > 0 && now.history.count === 0 && now.privacy.countsBytes === 0, 5000)
+    const pastesBefore = after.pastes.length
+    send('paste-last')
+    await sleep(800)
+    const recovered = await status()
+    const detail = {historyRows: recovered.history.count, recoveryEntriesWithText: recovered.recovery.filter(x => x.hasText).length, additionalPastes: recovered.pastes.length - pastesBefore, privacyProblem: recovered.privacy.problem}
+    console.log(`QA5_DELETE_EVIDENCE ${JSON.stringify(detail)}`)
+    expect(detail.recoveryEntriesWithText === 0 && detail.additionalPastes === 0, 'Deleted transcript remains recoverable and pasteable: ' + JSON.stringify(detail))
+  } finally { send('answer-dialogs none') }
+})
+scenario('QA5: Stop saving during recording must prevent later evaluation writes', async () => {
+  send('evaluation on')
+  await waitUntil('evaluation enabled', now => now.evaluationRecording, 3000)
+  const before = savedDictations().length
+  play(SHORT)
+  const session = await press()
+  await sleep(SHORT.ms + 400)
+  send('evaluation off')
+  await waitUntil('evaluation disabled before release', now => !now.evaluationRecording, 3000)
+  send('release')
+  const state = await waitIdle(20000)
+  expectPastedIntact(state, session)
+  await sleep(300)
+  const created = savedDictations().length - before
+  console.log(`QA5_STOP_SAVING_EVIDENCE ${JSON.stringify({recordingsCreatedAfterOptOut:created,evaluationRecording:state.evaluationRecording})}`)
+  expect(created === 0, `${created} evaluation recordings written after Stop saving`)
+})
+
+// Insert immediately before `const results = []` in a copy of scripts/test-app.mjs.
+// Uses only the existing quiet-app harness, fake audio, isolated userData/evaluation
+// directories, intercepted clipboard/paste/dialog/browser/login doors.
+
+scenario('QA5: setup practice must not persist audio or text after promising nothing is kept', async () => {
+  send('mode verbatim')
+  send('evaluation on')
+  try {
+    await waitUntil('evaluation enabled for setup re-entry', (now) => now.evaluationRecording === true, 3_000)
+    send('first-run again')
+    await waitUntil('setup guide open again', (now) => now.hub?.steps?.includes('welcome:current'), 6_000)
+    send('first-run-step try')
+    const before = await waitUntil('practice step', (now) => now.hub?.steps?.includes('try:current'), 3_000)
+    const filesBefore = savedDictations().length
+    send('own-window on')
+    const result = await dictate(SHORT)
+    expectPastedIntact(result.state, result.session, 'setup practice')
+    await sleep(700)
+    const after = await status()
+    const added = savedDictations().length - filesBefore
+    const stopSavingVisible = after.hub?.buttons?.includes('Stop Saving') === true
+    expect(after.history.count === before.history.count, 'practice unexpectedly added to history')
+    expect(added === 0, `setup practice saved ${added} evaluation files; Stop Saving visible=${stopSavingVisible}; history added=0`)
+  } finally {
+    send('own-window off')
+    send('evaluation off')
+    send('first-run done')
+  }
+})
+
+scenario('QA5: changing the Cleanup model reruns the same Try it sentence', async () => {
+  await inCleanedMode('echo', async () => {
+    await showPage('home', '')
+    await showPage('cleanup', 'Cleanup')
+    const before = ollama.transcripts.length
+    send(`type-hub A_sentence_to_try ${base64('um please send the finished report to the whole team later today')}`)
+    const deadline = Date.now() + 8_000
+    while (ollama.transcripts.length === before && Date.now() < deadline) await sleep(60)
+    expect(ollama.transcripts.length === before + 1, 'initial Try it request did not reach the local test model')
+    await sleep(700)
+    const asked = ollama.transcripts.length
+    send('choose-hub Model leaky:latest')
+    await waitUntil('new cleanup model selected', (now) => now.prefs.cleanupModel === 'leaky:latest', 6_000)
+    await sleep(4_000)
+    const retried = ollama.transcripts.length - asked
+    expect(retried >= 1, `model setting changed, but Try it made ${retried} new requests; previous-model result remains until text is edited`)
+  })
+})
+
+// The debug status exposes trayHandsFree, not the actual native menu. This probe
+// therefore combines a real processing state with the actual AppTray template,
+// loaded under counting Electron stubs; it does not open the system menu.
+scenario('QA5: processing Cancel on the pill must also be offered by the tray menu', async () => {
+  const requireQa5 = createRequire(import.meta.url)
+  const tsQa5 = requireQa5('typescript')
+  const vmQa5 = requireQa5('node:vm')
+  const traySourceQa5 = readFileSync(join(root, 'src/main/windows/tray.ts'), 'utf8')
+  let latestQa5 = []
+  const electronQa5 = {
+    Menu: { buildFromTemplate: (items) => { latestQa5 = items; return items } },
+    Tray: class { setToolTip() {} on() {} setContextMenu() {} setImage() {} },
+    app: { getName: () => 'QA App', quit() {} },
+  }
+  const exportsQa5 = {}
+  const sourceQa5 = tsQa5.transpileModule(traySourceQa5, {
+    compilerOptions: { module: tsQa5.ModuleKind.CommonJS, target: tsQa5.ScriptTarget.ES2022 },
+  }).outputText
+  vmQa5.runInNewContext(sourceQa5, {
+    exports: exportsQa5,
+    require: (id) => {
+      if (id === 'electron') return electronQa5
+      if (id === '@shared/icon-shapes') return { trayIconState: () => 'ready' }
+      if (id === '@shared/microphone-name') return { microphoneName: (s) => s, shortenInTheMiddle: (s) => s }
+      if (id === '../dictation/pause') return { clockTime: () => '12:00' }
+      if (id === './tray-icon') return { trayImage: () => null }
+      throw new Error(`Unexpected safe probe dependency ${id}`)
+    },
+  })
+  const stubTrayQa5 = new exportsQa5.AppTray(new Proxy({}, { get: () => () => {} }))
+  send('mode verbatim')
+  send('text-delay 10000')
+  try {
+    play(SHORT)
+    await press()
+    await sleep(SHORT.ms + 300)
+    send('release')
+    const processingQa5 = await waitUntil('processing pill Cancel', (now) => now.pill === 'processing' && now.pillCancel === true, 6_000)
+    stubTrayQa5.update({ handsFree: processingQa5.trayHandsFree, offer: processingQa5.trayOffer })
+    const cancelItemsQa5 = latestQa5.filter((item) => item.label === 'Cancel Dictation').length
+    expect(cancelItemsQa5 > 0, `pill Cancel=true; tray Cancel items=${cancelItemsQa5}; native menu template evaluated with the live processing state`)
+  } finally {
+    send('escape')
+    send('text-delay 0')
+    await waitIdle(20_000)
+  }
+})
+
+scenario('QA5: latest Cleanup model choice wins while earlier validation is slow', async () => {
+  await inCleanedMode('echo', async () => {
+    await showPage('home', '')
+    await showPage('cleanup', 'Cleanup')
+    // Allow its initial choices to be listed before delaying subsequent validation.
+    await sleep(3_000)
+    ollama.tagsDelayMs = 900
+    try {
+      let fromQa5 = log.length
+      send('choose-hub Model leaky:latest')
+      await waitForLog('hub field "Model": set', 3_000, fromQa5)
+      await sleep(150)
+      fromQa5 = log.length
+      // type-hub decodes an omitted value as empty, which is the Rules only option.
+      send('type-hub Model')
+      await waitForLog('hub field "Model": set', 3_000, fromQa5)
+      await waitUntil('last choice Rules only applied', (now) => now.prefs.cleanupModel === null, 2_000)
+      await sleep(3_500)
+      const afterQa5 = await status()
+      expect(afterQa5.prefs.cleanupModel === null, 'the earlier model selection overwrote the later Rules only choice after validation completed')
+    } finally {
+      ollama.tagsDelayMs = 0
+    }
+  })
+})

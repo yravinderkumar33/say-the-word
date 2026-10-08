@@ -1,4 +1,4 @@
-import { isHesitationIn, looksEnglish } from '../text/words'
+import { HESITATION_SOUND, isHesitationIn, looksEnglish } from '../text/words'
 
 /** "When you hear this, write that": a name or term the recognizer gets wrong. */
 export interface DictionaryEntry {
@@ -27,8 +27,8 @@ export function applyRules(text: string, dictionary: readonly DictionaryEntry[] 
 }
 
 /** The shapes a hesitation sound takes; `isHesitationIn` has the last word (it spares "ER"). */
-const SOUND = String.raw`(?:u+m+|u+h+m*|e+r+m*|a+h+|h+m+|m+h*m+)`
-const NOT_IN_WORD = String.raw`(?![\p{L}\p{N}'’-])`
+const SOUND = HESITATION_SOUND
+const NOT_IN_WORD = String.raw`(?![\p{L}\p{M}\p{N}'’-])`
 
 function removeHesitations(text: string): string {
   const english = looksEnglish(text)
@@ -66,7 +66,7 @@ const STUTTERED =
 function collapseStutters(text: string): string {
   return text.replace(
     new RegExp(
-      String.raw`(?<![\p{L}\p{N}'’-])(${STUTTERED})(?:,?\s+\1)+(?![\p{L}\p{N}'’-])`,
+      String.raw`(?<![\p{L}\p{M}\p{N}'’-])(${STUTTERED})(?:,?\s+\1)+(?![\p{L}\p{M}\p{N}'’-])`,
       'giu',
     ),
     (_whole, word: string) => word,
@@ -88,7 +88,10 @@ export function applyDictionary(text: string, dictionary: readonly DictionaryEnt
     .sort((a, b) => b.length - a.length)
     .map((phrase) => phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/ /g, '\\s+'))
   return text.replace(
-    new RegExp(String.raw`(?<![\p{L}\p{N}])(?:${patterns.join('|')})(?![\p{L}\p{N}])`, 'giu'),
+    new RegExp(
+      String.raw`(?<![\p{L}\p{M}\p{N}])(?:${patterns.join('|')})(?![\p{L}\p{M}\p{N}])`,
+      'giu',
+    ),
     (match) => replacements.get(key(match)) ?? match,
   )
 }

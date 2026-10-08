@@ -41,14 +41,30 @@ const CUES: Record<Cue, Note[]> = {
   busy: [{ frequency: 329.63, at: 0, duration: 0.07 }],
 }
 
-const VOLUME = 0.16
+/** How loud a cue is with the volume all the way up. The setting scales it down from there. */
+const LOUDEST = 0.36
+/** The volume the app starts with: a cue is heard, and does not startle. */
+const DEFAULT_VOLUME = 0.45
 /** The output is let go shortly after the last sound, so the audio device can rest. */
 const SUSPEND_AFTER_MS = 1_500
 
 let context: AudioContext | null = null
 let suspendTimer: ReturnType<typeof setTimeout> | null = null
 
-export function playCue(cue: Cue): void {
+/** The names the Settings page gives the cues, in the order it lists them. */
+export const CUE_NAMES: ReadonlyArray<{ cue: Cue; name: string }> = [
+  { cue: 'start', name: 'Speak now' },
+  { cue: 'stop', name: 'Stopped' },
+  { cue: 'lock', name: 'Hands-free on' },
+  { cue: 'notice', name: 'Did not paste' },
+  { cue: 'busy', name: 'Busy' },
+]
+
+/** Plays a cue. `volume` runs from 0 to 1; at 0 nothing is played. */
+export function playCue(cue: Cue, volume: number = DEFAULT_VOLUME): void {
+  const peak = LOUDEST * Math.min(1, Math.max(0, volume))
+  // Too quiet to hear, and the ramps below cannot start from nothing.
+  if (peak < 0.001) return
   try {
     context ??= new AudioContext()
     const audio = context
@@ -63,7 +79,7 @@ export function playCue(cue: Cue): void {
       // A quick rise and a smooth fall, so the note neither clicks nor rings.
       const from = begin + note.at
       gain.gain.setValueAtTime(0.0001, from)
-      gain.gain.exponentialRampToValueAtTime(VOLUME, from + 0.012)
+      gain.gain.exponentialRampToValueAtTime(peak, from + 0.012)
       gain.gain.exponentialRampToValueAtTime(0.0001, from + note.duration)
       oscillator.connect(gain).connect(audio.destination)
       oscillator.start(from)

@@ -1,44 +1,66 @@
-import { clipboard, powerMonitor, type BrowserWindow } from 'electron'
-import { HELPER_PROTOCOL_VERSION } from '@shared/helper-protocol'
+import { BrowserWindow, clipboard, powerMonitor } from 'electron'
+import { setTimeout as sleep } from 'node:timers/promises'
+import {
+  HELPER_PROTOCOL_VERSION,
+  type PasteOutcome,
+  type PasteResult,
+} from '@shared/helper-protocol'
 import {
   IPC,
   pillActionSchema,
+  type CleanupFacts,
+  type DictationMode,
+  type ModelKeep,
+  type OverlayPrefs,
+  type PillAction,
   type PillCue,
   type PillRecovery,
   type PillState,
+  type Practice,
   type SpeechState,
+  type TryResult,
 } from '@shared/ipc'
-import { DEFAULT_BINDINGS } from '@shared/keycodes'
+import { bindingsFor } from '@shared/keycodes'
 import { LocalOnlyGate, type LocalVerdict } from '../cleanup/local-only'
-import { OllamaClient } from '../cleanup/ollama-client'
-import { Refiner } from '../cleanup/refiner'
-import { applyDictionary } from '../cleanup/rules'
+import { findOllama, isInstalled } from '../cleanup/ollama-app'
+import { OllamaClient, isLoopbackUrl } from '../cleanup/ollama-client'
+import { Refiner, type CleanupNote } from '../cleanup/refiner'
+import { applyDictionary, applyRules } from '../cleanup/rules'
 import { describeHelperEvent, describeTarget, toMachineEvent } from '../hotkeys/route-helper-event'
-import { isRecording } from '../hotkeys/session-machine'
-import type { HelperBridge } from '../native/helper-bridge'
+import { isRecording, type MachineEvent } from '../hotkeys/session-machine'
+import { RESTORE_DELAY_MS, type HelperBridge } from '../native/helper-bridge'
 import { listenFromOwnPages } from '../security'
 import type { SettingsStore } from '../store/settings'
 import { modelToUse, modelsRoot } from '../stt/models-dir'
 import type { SttHost } from '../stt/stt-host'
+import { countWords } from '../text/words'
 import { positionOverlay } from '../windows/overlay-window'
+import { EvaluationSessions } from './evaluation-sessions'
 import { EvaluationRecorder, evaluationDir } from './evaluation-recorder'
-import { clipboardMessage, describeNotice, pillMessage } from './pill-messages'
+import { Pause } from './pause'
+import {
+  clipboardMessage,
+  describeNotice,
+  noteMessage,
+  pillMessage,
+  recordingEndedMessage,
+} from './pill-messages'
 import { DEFAULT_PRESENTER_OPTIONS, PillPresenter } from './pill-presenter'
+import { modeOf, type RecoveryEntry } from './recovery-buffer'
 import {
   SessionController,
-  type PasteOutcome,
   type ProducedText,
   type SessionHandle,
   type TargetInfo,
 } from './session-controller'
-import { SessionMetrics, formatTimings } from './session-metrics'
+import { SessionMetrics, formatTimings, type SessionTimings } from './session-metrics'
 import { MAX_RECORDING_MS, SpeechService } from './speech-service'
 
 /** How often to retry the event tap while waiting for the Accessibility grant. */
 const TAP_RETRY_MS = 2_000
 
 /** How long the helper holds the old clipboard after a paste, with room to spare. */
-const RESTORE_SETTLE_MS = 1_000
+const RESTORE_SETTLE_MS = 2 * RESTORE_DELAY_MS
 
 /** The reasons nobody may be looking at the screen. More than one can hold at once. */
 type Away = 'sleep' | 'screen lock' | 'user switch'
@@ -67,6 +89,47 @@ export interface DictationParts {
   shortcuts: boolean
   /** Called when something the tray or the Hub shows may have changed. */
   onStatusChange(): void
+  /** Called with everything the pill is made to show: the menu offers the same things. */
+  onPillChange?(state: PillState): void
+  /** Called once for each dictation that left text. Counts only: never the words. */
+  onDictation?(dictation: DictationCount): void
+  /** The microphone a dictation is to use, by device id; null for the system default. */
+  microphoneId(): string | null
+  /**
+   * A session's record was made or changed: the history is kept from these.
+   * `ownWindow`: it was dictated into one of the app's own windows (a practice, a
+   * try-out), which the history leaves out.
+   */
+  onRecorded?(entry: RecoveryEntry, facts: { ownWindow: boolean }): void
+  /** Where a session's time went, once it is over. */
+  onTimings?(sessionId: number, timings: SessionTimings): void
+  /** A session's text was fetched after all: pasted with the shortcut, or copied. */
+  onFetched?(sessionId: number, how: 'pasted' | 'copied'): void
+  /** A session failed, with these words on the pill. */
+  onFailed?(sessionId: number, message: string): void
+  /** Puts text on the clipboard. Handed in so that a test can count it instead. */
+  copy?(text: string): void
+  /** `fetch` for Ollama and for the model download: the app writes down where each goes. */
+  ollamaFetch?: typeof fetch
+  downloadFetch?: typeof fetch
+}
+
+/** How long the speech model stays in memory after the last dictation. Null: for as long as the app runs. */
+const MODEL_KEEP_MS: Record<ModelKeep, number | null> = {
+  tenMinutes: 10 * 60_000,
+  hour: 60 * 60_000,
+  always: null,
+}
+
+/** The longest sentence "Try it" takes: it is for a sentence, not for a document. */
+const TRY_MAX_CHARS = 600
+
+/** What is counted of a dictation: how many words it had, and how long the text took. */
+export interface DictationCount {
+  words: number
+  mode: DictationMode
+  /** From releasing the key to the paste being sent; null when it was not pasted. */
+  releaseToPasteMs: number | null
 }
 
 /** Hooks for the automated tests. They change nothing unless a test sets them. */
@@ -81,10 +144,17 @@ export interface DictationDebug {
   paste: ((session: number | null, text: string) => PasteOutcome) | null
   /** Makes the next decode fail with the recording kept, so Retry can be tested. */
   failNextTranscript: boolean
+  /** Stands in for "one of the app's own windows has the keyboard": a test's windows never do. */
+  ownWindow: boolean | null
 }
 
 export interface Dictation {
   controller: SessionController
+  privacyBlocked(): boolean
+  privacyGeneration(): number
+  discardAll(): Promise<number>
+  resumeAfterDiscard(): void
+  stopEvaluation(): Promise<number>
   speech: SpeechService
   /** True once the key event tap exists, which is when shortcuts start working. */
   shortcutsActive(): boolean
@@ -98,7 +168,40 @@ export interface Dictation {
    * not happen". For things outside a dictation, such as a setting that would not save.
    */
   tell(message: string): void
+  /** Does what the pill's button of that name does. */
+  act(action: PillAction): void
+  /** A shortcut was pressed. While dictation is paused, one that would start something is ignored. */
+  shortcut(event: MachineEvent): void
+  /** "Pause dictation": every shortcut is off until it ends. */
+  pause: Pause
+  /** How often each way of dictating has ended in a paste since launch. */
+  practice(): Practice
+  /** Ollama's state and the models that run on this Mac, for the Cleanup page. */
+  cleanupFacts(): Promise<CleanupFacts>
+  /** One sentence as Verbatim, with the rules only, and Cleaned, with the time each took. */
+  tryCleanup(text: string): Promise<TryResult>
+  /**
+   * Says "Copied" on the pill, for a copy made from the window or the menu. `session` is
+   * the session the text came from, when it is one of this launch: if it is the text
+   * that paste-last would fetch, the mark for unpasted text goes with the copy.
+   */
+  copied(session: number | null): void
+  /**
+   * A setting the pipeline acts on has changed: the dictation key, the sounds, the
+   * pill at rest, or how long the model stays in memory.
+   */
+  settingsChanged(): void
   debug: DictationDebug
+}
+
+/** Why a model's text was not used for a sentence that was tried, in the page's words. */
+function whyNotUsed(note: CleanupNote): string {
+  if (note === 'short') return 'Too short to need the model'
+  if (note === 'tooLong') return 'Too long to tidy in time'
+  if (note === 'timeout') return 'Too slow to use'
+  if (note.startsWith('guard:')) return 'It changed more than Cleaned allows'
+  if (note.startsWith('notLocal:')) return 'The model does not run on this Mac'
+  return 'The model did not answer'
 }
 
 /** Why Cleaned mode is using the rules only, in the tray's words. */
@@ -115,32 +218,87 @@ const CLEANUP_PROBLEMS: Record<Exclude<LocalVerdict, { local: true }>['reason'],
 /** Connects the helper's shortcut events, the microphone, the recognizer and the pill. */
 export function wireDictation(parts: DictationParts): Dictation {
   const { helper, stt, overlay, settings, shortcuts, onStatusChange } = parts
+  /** Sessions whose words have been counted. */
+  const counted = new Set<number>()
   const debug: DictationDebug = {
     textDelayMs: 0,
     maxRecordingMs: null,
     target: null,
     paste: null,
     failNextTranscript: false,
+    ownWindow: null,
   }
+  /** True when the keyboard is in one of the app's own windows: a practice, or a sentence being tried. */
+  const inOwnWindow = (): boolean => debug.ownWindow ?? BrowserWindow.getFocusedWindow() !== null
+  /** How long a recording may run. A test may set a shorter limit, so that it can reach it. */
+  const recordingLimitMs = (): number => debug.maxRecordingMs ?? MAX_RECORDING_MS
   const metrics = new SessionMetrics()
   let tapInstalled = false
+  /** The newest session begun: Delete Everything takes every session up to it (ids only grow). */
   let lastSession: number | null = null
   const away = new Set<Away>()
   /** A message about a session that ended while the user was away, shown on their return. */
   let heldForReturn: PillRecovery | null = null
+  /** Sessions that were locked on (hands-free), brought back with Undo, or dictated into our own window. */
+  const handsFree = new Set<number>()
+  const undone = new Set<number>()
+  const ownWindow = new Set<number>()
+  const practised: Practice = { hold: 0, handsFree: 0, undo: 0 }
+  /** What the pill last offered, so that pressing it is known for an Undo or a Retry. */
+  let offered: 'Undo' | 'Retry' | null = null
+  /** Forgets what was noted about sessions long over. */
+  const forgetOld = (session: number): void => {
+    for (const noted of [handsFree, undone, ownWindow]) {
+      for (const id of noted) if (id < session - 8) noted.delete(id)
+    }
+  }
 
-  const toOverlay = (channel: string, payload: PillState | PillCue): void => {
+  const toOverlay = (channel: string, payload: PillState | PillCue | OverlayPrefs): void => {
     if (!overlay.isDestroyed()) overlay.webContents.send(channel, payload)
   }
-  const presenter = new PillPresenter((state) => toOverlay(IPC.pillState, state), {
-    ...DEFAULT_PRESENTER_OPTIONS,
-    // The Undo or Retry button went with the message: the recording is let go.
-    onRecoveryGone: () => controller.forgetRedo(),
-  })
+  const presenter = new PillPresenter(
+    (state) => {
+      offered = state.kind === 'recovery' ? (state.redo ?? null) : null
+      toOverlay(IPC.pillState, state)
+      parts.onPillChange?.(state)
+    },
+    {
+      ...DEFAULT_PRESENTER_OPTIONS,
+      // The Undo or Retry button went with the message: the recording is let go.
+      onRecoveryGone: () => controller.forgetRedo(),
+    },
+  )
   const evaluation = new EvaluationRecorder(evaluationDir())
+  const evaluationSessions = new EvaluationSessions(evaluation, stt)
+  let purgedThrough = 0
+
+  // Every shortcut is off while dictation is paused: the table the helper is given is empty.
+  const sendBindings = (): void =>
+    helper.setBindings(pause.active ? [] : bindingsFor(settings.get().dictationKey))
+  const pushPrefs = (): void => {
+    const { sounds, soundVolume, pillAtRest, dictationKey } = settings.get()
+    toOverlay(IPC.overlayPrefs, {
+      sounds,
+      volume: soundVolume,
+      pillAtRest,
+      key: dictationKey,
+      pausedUntil: pause.until,
+    })
+  }
+  const pause: Pause = new Pause({
+    now: () => Date.now(),
+    onChange: (until) => {
+      console.log(`[dictation] ${until === null ? 'resumed' : 'paused'}`)
+      // A dictation under way cannot be finished without its shortcuts: its text is kept.
+      if (until !== null && controller.stateName !== 'idle') controller.dispatch({ type: 'abort' })
+      sendBindings()
+      pushPrefs()
+      onStatusChange()
+    },
+  })
 
   // Cleaned mode. The address is read from the settings each time it is used.
-  const ollama = new OllamaClient(settings.get().ollamaUrl)
+  const ollama = new OllamaClient(settings.get().ollamaUrl, parts.ollamaFetch)
   const gate = new LocalOnlyGate(
     ollama,
     () => Date.now(),
@@ -187,14 +345,113 @@ export function wireDictation(parts: DictationParts): Dictation {
     return { line, models }
   }
 
+  async function cleanupFacts(): Promise<CleanupFacts & { identity: string }> {
+    const { cleanupModel, ollamaUrl } = settings.get()
+    ollama.setBaseUrl(ollamaUrl)
+    const local = isLoopbackUrl(ollamaUrl)
+    let host = ollamaUrl
+    try {
+      host = new URL(ollamaUrl).hostname.replace(/^\[|\]$/g, '')
+    } catch {
+      // Shown as it was typed.
+    }
+    // Only an address on this Mac is asked anything, unless the user allowed another.
+    const reachable = local || settings.get().allowRemoteOllama
+    const running = reachable && (await ollama.version()) !== null
+    const models = running
+      ? await gate.localTextModels().then(
+          (found) => found.map((model) => ({ name: model.name, bytes: model.bytes })),
+          () => [],
+        )
+      : []
+    const verdict = running && cleanupModel ? await gate.check(cleanupModel) : null
+    // Ollama not answering is said by the line about Ollama, not as a fault of the model.
+    const refusal =
+      verdict && !verdict.local && verdict.reason !== 'unreachable' ? verdict.reason : null
+    return {
+      identity: JSON.stringify([
+        ollamaUrl,
+        cleanupModel,
+        verdict?.local ? verdict.identity.digest : null,
+        running,
+        refusal,
+      ]),
+      ollama: running ? 'running' : isInstalled(findOllama()) ? 'notRunning' : 'notInstalled',
+      host,
+      local,
+      models,
+      chosen: cleanupModel,
+      refusal,
+      alternative: refusal
+        ? (models.find((model) => model.name !== cleanupModel)?.name ?? null)
+        : null,
+      typicalMs: null,
+    }
+  }
+
+  /** Only the latest sentence tried is worth an answer: an older one still on its way is dropped. */
+  let trying: AbortController | null = null
+  async function tryCleanup(text: string): Promise<TryResult> {
+    if (controller.privacyBlocked)
+      return { verbatim: { text: '', ms: 0 }, rules: { text: '', ms: 0 }, cleaned: null }
+    trying?.abort()
+    const mine = new AbortController()
+    trying = mine
+    const { dictionary, cleanupModel, ollamaUrl } = settings.get()
+    const sentence = text.trim().slice(0, TRY_MAX_CHARS)
+    const timed = <Value>(run: () => Value): { value: Value; ms: number } => {
+      const started = performance.now()
+      const value = run()
+      return { value, ms: performance.now() - started }
+    }
+    const verbatim = timed(() => applyDictionary(sentence, dictionary))
+    const rules = timed(() => applyRules(sentence, dictionary))
+    const facts = await cleanupFacts()
+    const result: TryResult = {
+      identity: facts.identity,
+      verbatim: { text: verbatim.value, ms: verbatim.ms },
+      rules: { text: rules.value, ms: rules.ms },
+      cleaned: null,
+    }
+    if (!cleanupModel || sentence.length === 0) return result
+
+    ollama.setBaseUrl(ollamaUrl)
+    const refined = await refiner.refine(sentence, mine.signal, { patient: true })
+    // Nothing answered at the address: there is no model to show a result for.
+    if (refined.note === 'unreachable' || refined.note === 'notLocal:unreachable') return result
+    if (refined.note === 'noModel' || refined.note === 'cancelled') return result
+    const used =
+      refined.note === 'cleaned' &&
+      !refined.tooLongForDictation &&
+      refined.cleanupMs <= refined.allowedMs
+    result.cleaned = {
+      text: refined.cleaned ?? '',
+      ms: refined.cleanupMs,
+      model: cleanupModel,
+      used,
+      // A dictation this long would not have asked the model at all. A text that came,
+      // and came too late for a dictation, is said to be too slow.
+      why: used
+        ? null
+        : refined.tooLongForDictation
+          ? whyNotUsed('tooLong')
+          : refined.note === 'cleaned'
+            ? 'Too slow to use'
+            : whyNotUsed(refined.note),
+    }
+    return result
+  }
+
   const speech = new SpeechService({
     stt,
     overlay,
     modelsRoot: modelsRoot(),
     model: modelToUse(),
-    microphoneId: () => settings.get().microphoneId,
-    maxRecordingMs: () => debug.maxRecordingMs ?? MAX_RECORDING_MS,
-    evaluation: () => (settings.get().evaluationRecording ? evaluation : null),
+    microphoneId: () => parts.microphoneId(),
+    idleUnloadMs: () => MODEL_KEEP_MS[settings.get().modelKeep],
+    ...(parts.downloadFetch ? { fetchImpl: parts.downloadFetch } : {}),
+    maxRecordingMs: recordingLimitMs,
+    evaluation: (session) => evaluationSessions.forSession(session),
     failNextTranscript: () => {
       const fail = debug.failNextTranscript
       debug.failNextTranscript = false
@@ -211,23 +468,20 @@ export function wireDictation(parts: DictationParts): Dictation {
       console.log(`[dictation] recording ended by itself (session ${session}): ${reason}`)
       // What was captured is handled like a normal stop; the message says why it stopped.
       controller.endRecording(session)
-      presenter.showRecovery({
-        message:
-          reason === 'limit' ? 'Stopped at the 20-minute limit' : 'The microphone disconnected',
-        canCopy: false,
-        sound: true,
-      })
+      presenter.showRecovery(recordingEndedMessage(reason))
     },
     onLimitSoon: (session) => {
       if (controller.currentSessionId === session) toOverlay(IPC.pillCue, 'limitSoon')
     },
     onTranscript: (session, result) => {
+      if (session <= purgedThrough) return
       // Marks where recognition ends and cleanup begins, for a session that seems stuck.
       console.log(`[speech] heard (session ${session})`)
       metrics.decoded(session, result)
     },
     onStateChange: (state: SpeechState) => {
       console.log(`[speech] ${state}`)
+      presenter.setModelLoading(state === 'loading')
       onStatusChange()
     },
   })
@@ -235,11 +489,22 @@ export function wireDictation(parts: DictationParts): Dictation {
   const controller: SessionController = new SessionController({
     startRecording: (session) => {
       lastSession = session.id
+      forgetOld(session.id)
+      // A sentence being tried on the Cleanup page gives way: the dictation has the model.
+      trying?.abort()
       // Whoever starts a dictation is at the Mac, whatever was last heard about sleep
       // or the lock screen; a message kept for their return has been overtaken.
       away.clear()
       heldForReturn = null
-      metrics.started(session.id, Date.now())
+      const startedAt = Date.now()
+      metrics.started(session.id, startedAt)
+      presenter.setRecording({ startedAt, limitAt: startedAt + recordingLimitMs() })
+      if (inOwnWindow()) ownWindow.add(session.id)
+      evaluationSessions.begin(
+        session.id,
+        settings.get().evaluationRecording,
+        ownWindow.has(session.id),
+      )
       speech.startRecording(session)
       // The model is loaded while the user is still speaking.
       if (settings.get().mode === 'cleaned') {
@@ -249,18 +514,39 @@ export function wireDictation(parts: DictationParts): Dictation {
     },
     produceText: async (session) => {
       metrics.released(session.id, Date.now())
+      presenter.setTidying(settings.get().mode === 'cleaned')
       const heard = await speech.produceText(session)
-      if (debug.textDelayMs > 0) await wait(debug.textDelayMs, session.signal)
+      // Waits, but no longer than the session lives.
+      if (debug.textDelayMs > 0) {
+        await sleep(debug.textDelayMs, undefined, { signal: session.signal }).catch(() => {})
+      }
+      if (session.id <= purgedThrough) return null
       const produced = heard ? await shape(heard.raw, session) : null
+      if (session.id <= purgedThrough) return null
       metrics.textReady(session.id, Date.now())
       return produced
     },
     reproduceText: async (session) => {
+      presenter.setTidying(settings.get().mode === 'cleaned')
       const heard = await speech.reproduceText(session)
       return heard ? shape(heard.raw, session) : null
     },
-    forgetRecording: (sessionId) => speech.forget(sessionId),
-    captureTarget: async () => {
+    forgetRecording: (sessionId) => {
+      // Saved, if it is, before the speech process is told to let the recording go:
+      // it handles the two in the order they are sent.
+      void evaluationSessions.release(sessionId)
+      speech.forget(sessionId)
+    },
+    captureTarget: async (session) => {
+      // One of the app's own windows has the keyboard: a practice, or a sentence being
+      // tried. It is dictated into like any other app, and left out of the history and of
+      // the saved recordings. Where the keyboard was when the recording began counts as
+      // well (see `startRecording`): a dictation begun in a practice stays a practice.
+      // Paste-last reads a destination for no session.
+      if (session !== null && inOwnWindow()) {
+        ownWindow.add(session)
+        void evaluationSessions.exclude(session)
+      }
       if (debug.target) return debug.target()
       const target = await helper.captureTarget()
       console.log(describeTarget(target))
@@ -270,21 +556,46 @@ export function wireDictation(parts: DictationParts): Dictation {
       }
       return target
     },
-    paste: async (request) => {
-      // Paste-last runs with no session; only a session's own paste is timed.
-      const session = controller.currentSessionId
+    paste: async ({ text, targetId, sessionId: session }) => {
+      const generation = controller.privacyGeneration
+      // Paste-last pastes for no session; only a session's own paste is timed.
       if (session !== null) metrics.pasteSent(session, Date.now())
-      const outcome = debug.paste ? debug.paste(session, request.text) : await realPaste(request)
+      const result = debug.paste
+        ? { outcome: debug.paste(session, text) }
+        : await realPaste({ text, targetId })
+      if (generation !== controller.privacyGeneration) return result
       if (session !== null) metrics.pasteDone(session, Date.now())
-      return outcome
+      // Whatever text was waiting to be fetched has now been pasted, or is older than this.
+      if (result.outcome === 'pasted') presenter.textTaken()
+      if (result.outcome === 'pasted' && session !== null) {
+        // Which way of dictating this was, for the exercises of the first run.
+        if (undone.has(session)) practised.undo += 1
+        else if (handsFree.has(session)) practised.handsFree += 1
+        else practised.hold += 1
+      }
+      return result
     },
+    onRecorded: (entry) => {
+      if (entry.sessionId <= purgedThrough) return
+      evaluationSessions.note(entry)
+      parts.onRecorded?.(entry, { ownWindow: ownWindow.has(entry.sessionId) })
+    },
+    // Once its record says how it ended: the timings then land on its row in the history.
+    onSessionOver: (sessionId) => {
+      if (sessionId > purgedThrough) logTimings(sessionId)
+    },
+    onFetched: (sessionId, how) => parts.onFetched?.(sessionId, how),
     armEscape: (armed) => {
       // If the helper is down there is no session to cancel anyway.
       helper.armEscape(armed).catch(() => {})
     },
-    writeClipboard: (text) => {
-      clipboard.writeText(text)
-      return Promise.resolve()
+    writeClipboard: async (text) => {
+      if (parts.copy) parts.copy(text)
+      else {
+        await clipboard
+          .writeText(text)
+          .catch(() => console.error('[app] the clipboard could not be written'))
+      }
     },
     notify: (notice) => {
       console.log(`[dictation] ${describeNotice(notice)}`)
@@ -294,6 +605,8 @@ export function wireDictation(parts: DictationParts): Dictation {
       }
       const pill = pillMessage(notice, (sessionId) => controller.hasText(sessionId))
       if (!pill) return
+      if (notice.kind === 'copied') presenter.textTaken()
+      if (notice.kind === 'failed') parts.onFailed?.(notice.sessionId, pill.message)
       // A session ended by sleep or the lock screen reports its text a moment later,
       // to a screen nobody can see, and a message lasts six seconds. It is kept for
       // when they are back.
@@ -304,8 +617,14 @@ export function wireDictation(parts: DictationParts): Dictation {
       console.log(`[state] ${state}${sessionId === null ? '' : ` (session ${sessionId})`}`)
       // The pill follows the display the pointer is on.
       if (state === 'holding' || state === 'locked') positionOverlay(overlay)
+      // Noted as the recording begins, and not only when the destination is read: a
+      // practice that is cancelled or interrupted while the key is held never gets that
+      // far, and "Nothing here is kept" is said of it too.
+      if ((state === 'holding' || state === 'locked') && sessionId !== null && inOwnWindow()) {
+        ownWindow.add(sessionId)
+      }
+      if (state === 'locked' && sessionId !== null) handsFree.add(sessionId)
       presenter.setGesture(state)
-      if (state === 'idle' && lastSession !== null) logTimings(lastSession)
       // Not at once: the helper is still holding the clipboard of the paste just made,
       // and one that is closed puts it back early, before the app in front has read it.
       if (state === 'idle' && refreshWhenIdle) setTimeout(refreshHelper, RESTORE_SETTLE_MS)
@@ -313,8 +632,9 @@ export function wireDictation(parts: DictationParts): Dictation {
     now: () => Date.now(),
   })
 
-  async function realPaste(request: { text: string; targetId: number }): Promise<PasteOutcome> {
-    const { outcome, detail } = await helper.paste(request)
+  async function realPaste(request: { text: string; targetId: number }): Promise<PasteResult> {
+    const result = await helper.paste(request)
+    const { outcome, detail } = result
     // Why a paste was refused (which part of the destination moved, which permission
     // check said no): what is needed to tell one rightly refused from one refused by
     // mistake.
@@ -323,23 +643,50 @@ export function wireDictation(parts: DictationParts): Dictation {
         ? 'not the app this test may paste into'
         : detail
     console.log(`[paste] ${outcome}${why ? ` (${why})` : ''}`)
-    return outcome
+    return result
   }
 
-  /** One line per session, for the latency gates. Numbers only, never text. */
+  /**
+   * One line per session, for the latency gates, and its words counted. Numbers only,
+   * never text.
+   */
   function logTimings(session: number): void {
     const entry = controller.recovery.list().find((item) => item.sessionId === session)
     const timings = metrics.finish(session, entry?.outcome ?? 'none')
-    if (timings) console.log(formatTimings(timings))
+    if (timings) {
+      console.log(formatTimings(timings))
+      parts.onTimings?.(session, timings)
+    }
+    count(session, entry?.outcome === 'pasted' ? (timings?.releaseToPasteMs ?? null) : null)
+  }
+
+  /**
+   * Counts the words of a dictation that left text, once: Undo and Retry run a session
+   * a second time.
+   */
+  function count(session: number, releaseToPasteMs: number | null): void {
+    // A practice in the app's own windows is not dictating: it counts for nothing.
+    if (ownWindow.has(session)) return
+    const entry = controller.recovery.list().find((item) => item.sessionId === session)
+    if (!entry?.finalText || counted.has(session)) return
+    counted.add(session)
+    for (const id of counted) if (id < session - 8) counted.delete(id)
+    parts.onDictation?.({
+      words: countWords(entry.finalText),
+      mode: modeOf(entry, settings.get().mode),
+      releaseToPasteMs,
+    })
   }
 
   // --- The pill's buttons -----------------------------------------------------------
 
-  listenFromOwnPages(IPC.pillAction, (payload) => {
-    const action = pillActionSchema.safeParse(payload)
-    if (!action.success) return
-    console.log(`[pill] ${action.data}`)
-    switch (action.data) {
+  /**
+   * What the pill's buttons do. The menu-bar menu offers the same things, for hands
+   * that are on the keyboard: the pill itself can only be reached with the pointer.
+   */
+  function act(action: PillAction): void {
+    console.log(`[pill] ${action}`)
+    switch (action) {
       case 'copy':
         return controller.dispatch({ type: 'copyLast' })
       case 'cancel':
@@ -347,23 +694,56 @@ export function wireDictation(parts: DictationParts): Dictation {
       case 'start':
         // A click on the resting pill starts a hands-free recording. A click that
         // arrives while a session is running came from a pill that was out of date.
-        if (controller.stateName !== 'idle') return
+        if (controller.stateName !== 'idle' || pause.active) return
         return controller.dispatch({ type: 'handsFreeDown', t: CLICK_TIME })
       case 'stop':
         return controller.dispatch({ type: 'stop' })
-      case 'redo':
+      case 'redo': {
         // The message that offered it has done its job. Dismissed after the redo has
         // begun, because dismissing a message also withdraws its offer.
+        const wasUndo = offered === 'Undo'
         controller.redo()
+        const session = controller.currentSessionId
+        if (wasUndo && session !== null) undone.add(session)
         return presenter.dismissRecovery()
+      }
       case 'dismiss':
         return presenter.dismissRecovery()
     }
+  }
+
+  listenFromOwnPages(IPC.pillAction, (payload) => {
+    const action = pillActionSchema.safeParse(payload)
+    if (action.success) act(action.data)
   })
+
+  // A message does not leave from under the pointer: the page says when it is over the pill.
+  listenFromOwnPages(IPC.overlayInteractive, (payload) =>
+    presenter.setPointerOver(payload === true),
+  )
+  // A page that has just loaded, or has gone, has no pointer over anything. One that
+  // has just loaded knows none of the settings it acts on either.
+  overlay.webContents.on('did-finish-load', () => {
+    presenter.setPointerOver(false)
+    pushPrefs()
+  })
+  overlay.webContents.on('render-process-gone', () => presenter.setPointerOver(false))
 
   // --- The helper -------------------------------------------------------------------
 
-  helper.setBindings(DEFAULT_BINDINGS)
+  sendBindings()
+
+  /** The presses that start something. While dictation is paused they do nothing. */
+  const STARTS = new Set<MachineEvent['type']>([
+    'pttDown',
+    'handsFreeDown',
+    'pasteLast',
+    'copyLast',
+  ])
+  const shortcut = (event: MachineEvent): void => {
+    if (pause.active && STARTS.has(event.type)) return
+    controller.dispatch(event)
+  }
 
   helper.on('event', (event) => {
     console.log(describeHelperEvent(event))
@@ -380,7 +760,7 @@ export function wireDictation(parts: DictationParts): Dictation {
       }
     }
     const machineEvent = toMachineEvent(event)
-    if (machineEvent) controller.dispatch(machineEvent)
+    if (machineEvent) shortcut(machineEvent)
   })
 
   /**
@@ -491,7 +871,9 @@ export function wireDictation(parts: DictationParts): Dictation {
   // there was to say about a session that ended while nobody was looking is said now.
   const comeBack = (reason: Away) => (): void => {
     away.delete(reason)
-    helper.setBindings(DEFAULT_BINDINGS)
+    // A pause whose time ran out while the Mac slept ends now.
+    pause.recheck()
+    sendBindings()
     if (away.size > 0 || !heldForReturn) return
     presenter.showRecovery(heldForReturn)
     heldForReturn = null
@@ -502,21 +884,67 @@ export function wireDictation(parts: DictationParts): Dictation {
 
   const tell = (message: string): void => {
     console.log(`[app] ${message}`)
-    presenter.showRecovery({ message, canCopy: false, sound: true })
+    presenter.showRecovery(noteMessage(message))
   }
 
-  return { controller, speech, shortcutsActive: () => tapInstalled, cleanupStatus, tell, debug }
-}
-
-/** Waits, but no longer than the session lives. */
-function wait(ms: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const done = (): void => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', done)
-      resolve()
+  let keyInForce = settings.get().dictationKey
+  const settingsChanged = (): void => {
+    if (settings.get().dictationKey !== keyInForce) {
+      keyInForce = settings.get().dictationKey
+      sendBindings()
     }
-    const timer = setTimeout(done, ms)
-    signal.addEventListener('abort', done, { once: true })
-  })
+    trying?.abort()
+    pushPrefs()
+    speech.keepLoaded()
+  }
+
+  return {
+    controller,
+    privacyBlocked: () => controller.privacyBlocked,
+    privacyGeneration: () => controller.privacyGeneration,
+    stopEvaluation: () => evaluationSessions.stop(),
+    discardAll: async () => {
+      // Every session begun so far, also one that is neither current nor recorded yet: an
+      // interrupted session whose text is still being worked out.
+      purgedThrough = Math.max(
+        purgedThrough,
+        ...controller.recovery.list().map((entry) => entry.sessionId),
+        controller.currentSessionId ?? 0,
+        lastSession ?? 0,
+      )
+      // A result still on its way for one of these sessions is not kept when it arrives.
+      stt.discardThrough(purgedThrough)
+      trying?.abort()
+      heldForReturn = null
+      // Every saving is called off first, at once: letting the recordings go below would
+      // otherwise save the sessions that have just ended.
+      const purging = evaluationSessions.purge()
+      const discard = controller.discardAll()
+      presenter.reset()
+      const failed = await purging
+      await discard
+      presenter.reset()
+      return failed
+    },
+    resumeAfterDiscard: () => controller.resumeAfterDiscard(),
+    speech,
+    shortcutsActive: () => tapInstalled,
+    cleanupStatus,
+    tell,
+    act,
+    shortcut,
+    pause,
+    practice: () => ({ ...practised }),
+    cleanupFacts,
+    tryCleanup,
+    copied: (session) => {
+      // The text the mark stands for has been fetched this way: the mark goes, as it
+      // does for a copy made with the shortcut. A copy of an older dictation leaves it.
+      if (session !== null && controller.lastTextSession === session) presenter.textTaken()
+      const pill = pillMessage({ kind: 'copied' }, () => false)
+      if (pill) presenter.showRecovery(pill)
+    },
+    settingsChanged,
+    debug,
+  }
 }

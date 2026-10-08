@@ -59,9 +59,9 @@ final class PasteTransaction {
     func paste(
         pasteId: Int,
         text: String,
-        targetId: Int?,
+        targetId: Int,
         restoreDelayMs: Int,
-        expiresAtMs: Double? = nil
+        expiresAtMs: Double
     ) -> (outcome: String, detail: String?) {
         let pasteboard = NSPasteboard.general
         var keys: (down: CGEvent, up: CGEvent)?
@@ -134,20 +134,12 @@ final class PasteTransaction {
     }
 
     /// Why a paste into this destination must be refused, or nil when it may go ahead.
-    private func refusal(for targetId: Int?, afterWait: Bool) -> (outcome: String, detail: String?)? {
-        if let targetId {
-            switch targets.compare(targetId: targetId, afterWait: afterWait) {
-            case .same: return nil
-            case .changed(let what): return ("targetChanged", what)
-            case .secure(let why): return ("secureField", why)
-            }
+    private func refusal(for targetId: Int, afterWait: Bool) -> (outcome: String, detail: String?)? {
+        switch targets.compare(targetId: targetId, afterWait: afterWait) {
+        case .same: return nil
+        case .changed(let what): return ("targetChanged", what)
+        case .secure(let why): return ("secureField", why)
         }
-        guard let now = targets.current() else { return nil }
-        // With no recorded destination to ask, the app that was last seen in front is
-        // asked whether it still is.
-        if afterWait, targets.isFrontmost(now.pid) != true { return ("targetChanged", "app") }
-        if let why = now.secureReason { return ("secureField", why) }
-        return nil
     }
 
     /// The Cmd+V key press, ready to post, or nil if it cannot be made.

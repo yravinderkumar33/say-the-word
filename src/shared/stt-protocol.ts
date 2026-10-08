@@ -14,6 +14,9 @@ export type WorkerControl =
   | { t: 'cancel'; session: number }
   /** Evaluation mode: when this session's recording ends, write it to `path` as a WAV file. */
   | { t: 'saveAudio'; session: number; path: string }
+  | { t: 'releaseEvaluation'; session: number }
+  | { t: 'commitEvaluation'; session: number; request: number }
+  | { t: 'discardEvaluation'; sessions: number[]; request: number }
 
 /** overlay renderer → worker, over the audio MessagePort. Sent by structured clone. */
 export type AudioMessage =
@@ -48,5 +51,4 @@ export type WorkerEvent =
   | { t: 'probe-ack'; samples: number; isFloat32: boolean }
   | TranscriptEvent
   | { t: 'failed'; session: number; message: string }
-  | { t: 'audioSaved'; session: number; path: string }
-  | { t: 'audioSaveFailed'; session: number; message: string }
+  | { t: 'evaluationDone'; request: number; failed: number }

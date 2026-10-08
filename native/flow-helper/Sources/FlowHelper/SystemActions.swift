@@ -61,7 +61,7 @@ final class SystemActions: HelperActions {
     }
 
     func paste(
-        pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int, expiresAtMs: Double?
+        pasteId: Int, text: String, targetId: Int, restoreDelayMs: Int, expiresAtMs: Double
     ) -> [String: Any] {
         let result = paster.paste(
             pasteId: pasteId,
@@ -75,13 +75,12 @@ final class SystemActions: HelperActions {
         return reply
     }
 
+    /// Asked every second and a half while the main window is open, which is where the
+    /// first run waits for Accessibility. It does not ask macOS whether this process may
+    /// post key events: without Accessibility, each such question goes to the permission
+    /// service afresh and fills its log.
     func checkPermissions() -> [String: Any] {
-        [
-            "accessibilityTrusted": isTrusted(),
-            "postEventAccess": PasteTransaction.mayPostEvents().allowed,
-            "tapInstalled": tap.isInstalled,
-            "secureInput": SecureInput.isEnabled,
-        ]
+        ["accessibilityTrusted": isTrusted(), "tapInstalled": tap.isInstalled]
     }
 
     func promptAccessibility() -> [String: Any] {

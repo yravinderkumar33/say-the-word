@@ -28,3 +28,29 @@ export function switchesToIgnore(names: string[], build: BuildKind): string[] {
   if (!build.packaged || build.devBuild) return []
   return names.filter(isTestSwitch)
 }
+
+/**
+ * Chromium's and Node's switches that open the app to a debugger. Whoever attaches one
+ * can drive the app's pages, and so record through its Microphone permission and read
+ * the history: what the test switches are kept out for. Node's act before any of the
+ * app's code runs (`--inspect-brk` stops at its first line), so against those it is the
+ * build itself that must be closed (Electron's `nodeCliInspect` fuse).
+ */
+const DEBUGGING_SWITCHES = [
+  'remote-debugging-port',
+  'remote-debugging-pipe',
+  'remote-debugging-address',
+  'inspect',
+  'inspect-brk',
+  'inspect-brk-node',
+  'inspect-port',
+]
+
+/** The debugging switches this build was started with, and refuses to run under. */
+export function debuggingSwitchesToRefuse(
+  given: (name: string) => boolean,
+  build: BuildKind,
+): string[] {
+  if (!build.packaged || build.devBuild) return []
+  return DEBUGGING_SWITCHES.filter((name) => given(name))
+}

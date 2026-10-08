@@ -183,12 +183,4 @@ struct PasteSequenceTests {
         #expect(result.detail == "element")
         #expect(system.calls == ["postAccess", "prepareKeys", "refusal"])
     }
-
-    @Test func aRequestWithNoExpiryIsNeverCalledOffForTime() {
-        system.clipboardReadTakesMs = 60_000
-
-        let result = PasteSequence.run(system.steps, expiresAtMs: nil)
-
-        #expect(result.outcome == "pasted")
-    }
 }

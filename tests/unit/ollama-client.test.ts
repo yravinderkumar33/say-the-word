@@ -252,6 +252,7 @@ describe('server information', () => {
               {
                 name: 'qwen3.5:4b',
                 digest: 'abc',
+                size: 3_383_000_000,
                 capabilities: ['completion', 'thinking'],
                 details: { parameter_size: '4.7B' },
               },
@@ -267,10 +268,16 @@ describe('server information', () => {
         name: 'qwen3.5:4b',
         digest: 'abc',
         capabilities: ['completion', 'thinking'],
-        parameterSize: '4.7B',
+        bytes: 3_383_000_000,
         remote: false,
       },
-      { name: 'cloud:latest', digest: 'def', capabilities: [], parameterSize: null, remote: true },
+      {
+        name: 'cloud:latest',
+        digest: 'def',
+        capabilities: [],
+        bytes: null,
+        remote: true,
+      },
     ])
   })
 
@@ -286,6 +293,16 @@ describe('server information', () => {
 
     expect(await client.show('alias')).toEqual({ capabilities: ['completion'], remote: true })
     await expect(client.show('gone')).rejects.toMatchObject({ kind: 'http' })
+  })
+
+  it('calls a list or details that are not an object a malformed reply', async () => {
+    const client = await serve({
+      '/api/tags': (_request, response) => response.end('null'),
+      '/api/show': (_request, response) => response.end('null'),
+    })
+
+    await expect(client.models()).rejects.toMatchObject({ kind: 'stream' })
+    await expect(client.show('qwen3.5:4b')).rejects.toMatchObject({ kind: 'stream' })
   })
 })
 

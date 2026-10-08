@@ -10,6 +10,8 @@ directories:
 
 files:
   - out/**
+  # The note on who is using out/ (scripts/lib/build-output.mjs), and its drafts.
+  - '!out/.in-use.json*'
 
 # The app's own code is bundled by electron-vite. The one runtime dependency is the
 # speech library, which ships prebuilt binaries, so nothing needs rebuilding.
@@ -20,6 +22,18 @@ npmRebuild: false
 asarUnpack:
   - node_modules/sherpa-onnx-node/**
   - node_modules/sherpa-onnx-darwin-*/**
+
+# Switches that Electron acts on before any of the app's own code runs, and with the
+# app's Microphone and Accessibility permissions: running the binary as plain Node,
+# NODE_OPTIONS, and the inspector. Off in every build. The app runs from its archive
+# only, and the archive must match the hash signed into the bundle.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+  enableEmbeddedAsarIntegrityValidation: true
+  grantFileProtocolExtraPrivileges: false
 
 extraResources:
   - from: resources/bin
@@ -37,4 +51,7 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   notarize: false
   extendInfo:
+    # A menu-bar app: it starts with no Dock icon, so none flashes up at launch or at
+    # login. "Show in Dock" in Settings turns the icon on (see applyDock in src/main/index.ts).
+    LSUIElement: true
     NSMicrophoneUsageDescription: Whisper Flow listens only while you are dictating, which is while you hold the dictation key or until you stop a hands-free dictation. Audio stays on this Mac.

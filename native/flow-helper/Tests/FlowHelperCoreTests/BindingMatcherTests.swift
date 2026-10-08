@@ -301,7 +301,134 @@ struct BindingMatcherTests {
         #expect(release == MatcherDecision(events: [.bindingUp("ptt")], swallow: true))
     }
 
+    @Test mutating func aKeyDownThatIsLetThroughOwnsItsKeyUp() {
+        // Fn and Space lock a dictation on, and that Space is swallowed. Its release never
+        // reaches the tap, and nothing resets the matcher.
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: true)
+        _ = sut.keyDown(keyCode: Self.space, isRepeat: false)
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: false)
+        // The next dictation.
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: true)
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: false)
+
+        let down = sut.keyDown(keyCode: Self.space, isRepeat: false)
+        let up = sut.keyUp(keyCode: Self.space)
+
+        #expect(down == MatcherDecision())
+        #expect(up == MatcherDecision(), "Its key-down reached the app, so must its key-up, or Space stays down there.")
+    }
+
     @Test func capsLockIsNotAHeldKey() {
         #expect(KeyCode.isModifier(KeyCode.capsLock) == false, "Its down lasts as long as the light is on.")
+    }
+
+    // MARK: Control and Option as the dictation key
+
+    /// The table the app sends when the dictation key is Control and Option together:
+    /// for keyboards without Fn, and for when another app has taken it.
+    static let controlOption = [
+        Binding(id: "ptt", chords: [
+            [KeyCode.leftControl, KeyCode.leftOption],
+            [KeyCode.leftControl, KeyCode.rightOption],
+            [KeyCode.rightControl, KeyCode.leftOption],
+            [KeyCode.rightControl, KeyCode.rightOption],
+        ]),
+        Binding(id: "handsFree", chords: [
+            [KeyCode.leftControl, KeyCode.leftOption, space],
+            [KeyCode.leftControl, KeyCode.rightOption, space],
+            [KeyCode.rightControl, KeyCode.leftOption, space],
+            [KeyCode.rightControl, KeyCode.rightOption, space],
+        ]),
+        Binding(id: "pasteLast", chords: [[command, control, letterV]]),
+    ]
+
+    @Test func controlAndOptionTogetherStartPushToTalkAndEitherReleaseEndsIt() {
+        var matcher = BindingMatcher(bindings: Self.controlOption)
+
+        let first = matcher.modifierChanged(keyCode: KeyCode.leftControl, isDown: true)
+        let second = matcher.modifierChanged(keyCode: KeyCode.rightOption, isDown: true)
+        let released = matcher.modifierChanged(keyCode: KeyCode.leftControl, isDown: false)
+        let other = matcher.modifierChanged(keyCode: KeyCode.rightOption, isDown: false)
+
+        #expect(first == MatcherDecision(), "Control alone is not the chord.")
+        // Not swallowed: holding two modifiers does nothing in any app, and other apps'
+        // idea of which keys are down must stay true.
+        #expect(second == MatcherDecision(events: [.bindingDown("ptt")], swallow: false))
+        #expect(released == MatcherDecision(events: [.bindingUp("ptt")], swallow: false))
+        #expect(other == MatcherDecision())
+    }
+
+    @Test func spaceWhileHoldingControlAndOptionLocksOnAndIsSwallowed() {
+        var matcher = BindingMatcher(bindings: Self.controlOption)
+        _ = matcher.modifierChanged(keyCode: KeyCode.leftControl, isDown: true)
+        _ = matcher.modifierChanged(keyCode: KeyCode.leftOption, isDown: true)
+
+        let down = matcher.keyDown(keyCode: Self.space, isRepeat: false)
+        let up = matcher.keyUp(keyCode: Self.space)
+
+        #expect(down == MatcherDecision(events: [.bindingDown("handsFree")], swallow: true))
+        #expect(up == MatcherDecision(events: [.bindingUp("handsFree")], swallow: true))
+    }
+
+    @Test func anotherKeyWhileHoldingControlAndOptionInterruptsAndIsLeftAlone() {
+        var matcher = BindingMatcher(bindings: Self.controlOption)
+        _ = matcher.modifierChanged(keyCode: KeyCode.leftControl, isDown: true)
+        _ = matcher.modifierChanged(keyCode: KeyCode.leftOption, isDown: true)
+
+        // Control-Option-arrow is a shortcut of the user's app: it is theirs, and the
+        // dictation that the two keys started is given up.
+        let arrow = matcher.keyDown(keyCode: Self.leftArrow, isRepeat: false)
+
+        #expect(arrow == MatcherDecision(events: [.interrupted("ptt")], swallow: false))
+    }
+
+    @Test func aThirdModifierHeldFirstMeansItIsNotTheDictationKey() {
+        var matcher = BindingMatcher(bindings: Self.controlOption)
+        _ = matcher.modifierChanged(keyCode: Self.command, isDown: true)
+        _ = matcher.modifierChanged(keyCode: KeyCode.leftControl, isDown: true)
+
+        let option = matcher.modifierChanged(keyCode: KeyCode.leftOption, isDown: true)
+
+        #expect(option.events.isEmpty, "Command, Control and Option together are some other shortcut.")
+    }
+
+    @Test func fnIsLeftToOthersWhenItIsNotTheDictationKey() {
+        var matcher = BindingMatcher(bindings: Self.controlOption)
+
+        let down = matcher.modifierChanged(keyCode: Self.fn, isDown: true)
+        let up = matcher.modifierChanged(keyCode: Self.fn, isDown: false)
+
+        // The other dictation app, or the system, gets its Fn key back whole.
+        #expect(down == MatcherDecision())
+        #expect(up == MatcherDecision())
+    }
+
+    @Test func pasteLastStillWorksBesideControlAndOption() {
+        var matcher = BindingMatcher(bindings: Self.controlOption)
+        _ = matcher.modifierChanged(keyCode: Self.command, isDown: true)
+        _ = matcher.modifierChanged(keyCode: Self.control, isDown: true)
+
+        let down = matcher.keyDown(keyCode: Self.letterV, isRepeat: false)
+
+        #expect(down == MatcherDecision(events: [.bindingDown("pasteLast")], swallow: true))
+    }
+
+    @Test func anEmptyTableMatchesNothingAndSwallowsNothing() {
+        // What the app sends while dictation is paused: every key is the user's own.
+        var matcher = BindingMatcher(bindings: [])
+
+        let fn = matcher.modifierChanged(keyCode: Self.fn, isDown: true)
+        let space = matcher.keyDown(keyCode: Self.space, isRepeat: false)
+
+        #expect(fn == MatcherDecision())
+        #expect(space == MatcherDecision())
+    }
+
+    @Test mutating func pausingEndsAShortcutThatIsDown() {
+        _ = sut.modifierChanged(keyCode: Self.fn, isDown: true)
+
+        let ended = sut.configure([])
+
+        #expect(ended == [.bindingUp("ptt")], "The new table will never report its release.")
     }
 }

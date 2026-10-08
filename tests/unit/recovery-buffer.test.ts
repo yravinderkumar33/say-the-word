@@ -70,6 +70,30 @@ describe('RecoveryBuffer', () => {
     ])
   })
 
+  it('takes everything but the text from a later attempt that ends with none', () => {
+    const buffer = new RecoveryBuffer()
+    buffer.record(entry(1, { outcome: 'cancelled', cleanupNote: 'rules' }))
+
+    // An Undo that the Mac interrupted, and that left no text of its own.
+    const none = { rawText: null, finalText: null }
+    buffer.record(entry(1, { ...none, endedAt: 9_000, outcome: 'cancelled', interrupted: true }))
+    expect(buffer.list()[0]).toMatchObject({ interrupted: true, finalText: 'final 1' })
+
+    // A Retry that read where its text was to go, and then failed.
+    buffer.record(entry(1, { ...none, endedAt: 10_000, outcome: 'failed', appName: 'Mail' }))
+    expect(buffer.list()).toEqual([
+      {
+        sessionId: 1,
+        endedAt: 10_000,
+        outcome: 'failed',
+        rawText: 'raw 1',
+        finalText: 'final 1',
+        cleanupNote: 'rules',
+        appName: 'Mail',
+      },
+    ])
+  })
+
   it('takes the text of a later attempt over that of an earlier one', () => {
     const buffer = new RecoveryBuffer()
     buffer.record(entry(1, { outcome: 'cancelled' }))

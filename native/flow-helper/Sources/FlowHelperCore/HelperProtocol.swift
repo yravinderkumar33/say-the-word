@@ -3,7 +3,8 @@ import Foundation
 /// Constants and message builders for the JSON-lines protocol spoken with the app.
 /// The TypeScript side of the same contract is `src/shared/helper-protocol.ts`.
 public enum HelperProtocol {
-    /// Bumped whenever a message changes shape. The app refuses a mismatch.
+    /// Bumped whenever a message changes shape. The app logs a mismatch and carries on;
+    /// the smoke test fails on one.
     public static let version = 3
 
     public static let helperVersion = "0.1.0"

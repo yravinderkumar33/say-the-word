@@ -20,9 +20,8 @@
 // Each `.wav` is run through the same path the app uses: voice detection, cutting at
 // pauses, the recognizer.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { FRAME_SAMPLES, SAMPLE_RATE } from '../src/shared/audio-format'
+import { SAMPLE_RATE } from '../src/shared/audio-format'
 import { decodeWav } from '../src/shared/wav'
 import {
   alignWords,
@@ -31,24 +30,20 @@ import {
   wordEditDistance,
   type WordEdit,
 } from '../src/shared/wer'
-import { loadParakeet } from '../src/main/stt/engines/sherpa-parakeet'
-import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { adoptModel, modelDir } from '../src/main/stt/model-store'
-import { modelsRoot } from '../src/main/stt/models-dir'
-import { Transcriber, type TranscriberEvent } from '../src/main/stt/transcriber'
-import { VoiceDetector } from '../src/main/stt/vad'
+import { evaluationDir } from '../src/main/dictation/evaluation-recorder'
+import { switches } from './lib/args.mjs'
+import { readCorrected } from './lib/evaluation-text'
+import { loadSpeech, transcribe } from './lib/speech'
 
-const args = process.argv.slice(2)
-const option = (name: string): string | null => {
-  const index = args.indexOf(name)
-  return index === -1 ? null : (args[index + 1] ?? '')
-}
-const dir =
-  option('--dir') ??
-  process.env['WHISPER_FLOW_EVAL_DIR'] ??
-  join(homedir(), 'Library', 'Application Support', 'Whisper Flow', 'evaluation')
-const show = Number(option('--show') ?? 5)
-const quiet = args.includes('--quiet')
+const {
+  dir = evaluationDir(),
+  show = 5,
+  quiet = false,
+} = switches({
+  dir: { type: 'string' },
+  show: { type: 'number', min: 0 },
+  quiet: { type: 'boolean' },
+})
 
 interface Item {
   name: string
@@ -70,16 +65,6 @@ interface Score {
   decodeMs: number
 }
 
-/** Leading lines of `#tags` are labels; the rest is the intended text. */
-function parseText(raw: string): { tags: string[]; text: string } {
-  const lines = raw.replace(/\r/g, '').split('\n')
-  const tags: string[] = []
-  while (lines.length > 0 && /^\s*(#[\p{L}\p{N}-]+\s*)+$/u.test(lines[0] ?? '')) {
-    tags.push(...(lines.shift() ?? '').toLowerCase().match(/#[\p{L}\p{N}-]+/gu)!)
-  }
-  return { tags, text: lines.join('\n').trim() }
-}
-
 function loadItems(): { items: Item[]; withoutText: number } {
   if (!existsSync(dir)) return { items: [], withoutText: 0 }
   const items: Item[] = []
@@ -92,7 +77,7 @@ function loadItems(): { items: Item[]; withoutText: number } {
       withoutText += 1
       continue
     }
-    const { tags, text } = parseText(readFileSync(textPath, 'utf8'))
+    const { tags, text } = readCorrected(readFileSync(textPath, 'utf8'))
     if (text.length === 0) {
       withoutText += 1
       continue
@@ -133,27 +118,11 @@ async function main(): Promise<void> {
     return
   }
 
-  const root = modelsRoot()
-  if (!(await adoptModel(root, DEFAULT_MODEL)).ready) {
-    throw new Error('The speech model is not downloaded. Run: npm run models:download')
-  }
-  const model = modelDir(root, DEFAULT_MODEL)
-  const { engine } = await loadParakeet(model, 4)
-  const detector = new VoiceDetector(join(model, 'silero_vad.onnx'))
+  const speech = await loadSpeech()
 
   const scores: Score[] = []
-  let session = 0
   for (const item of items) {
-    session += 1
-    const events: TranscriberEvent[] = []
-    const transcriber = new Transcriber(engine, detector, (event) => events.push(event))
-    transcriber.begin(session)
-    let frames = 0
-    for (let offset = 0; offset < item.samples.length; offset += FRAME_SAMPLES) {
-      transcriber.acceptFrame(session, frames++, item.samples.slice(offset, offset + FRAME_SAMPLES))
-    }
-    await transcriber.end(session, frames)
-    const result = events.find((event) => event.t === 'final')
+    const { result } = await transcribe(speech, item.samples)
     const heard = result?.t === 'final' ? result.text : ''
     const expectedWords = comparableWords(item.intended)
     const expectedPieces = surfaceTokens(item.intended)
@@ -187,7 +156,7 @@ async function main(): Promise<void> {
   }
 
   const audioSeconds = sum(scores, (score) => score.item.samples.length) / SAMPLE_RATE
-  console.log(`Recognizer: ${engine.id}. Folder: ${dir}`)
+  console.log(`Recognizer: ${speech.engine.id}. Folder: ${dir}`)
   console.log(
     `${scores.length} dictations, ${(audioSeconds / 60).toFixed(1)} minutes of audio, ` +
       `decoded in ${(sum(scores, (score) => score.decodeMs) / 1000).toFixed(1)} s.\n`,

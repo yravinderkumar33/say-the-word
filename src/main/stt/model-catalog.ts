@@ -29,7 +29,7 @@ const PARAKEET_BASE =
  * NVIDIA Parakeet TDT 0.6b v3, 8-bit, in sherpa-onnx format, plus the Silero
  * voice-activity model the worker uses to find speech. About 671 MB in total.
  */
-export const PARAKEET_V3: ModelSpec = {
+const PARAKEET_V3: ModelSpec = {
   id: 'parakeet-tdt-0.6b-v3-int8',
   label: 'Parakeet v3',
   licence: 'Parakeet: CC-BY-4.0 (NVIDIA). Silero VAD: MIT.',

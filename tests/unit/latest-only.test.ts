@@ -89,6 +89,27 @@ describe('latestOnly', () => {
     expect(t.acted).toEqual(['answered this time'])
   })
 
+  it('says in the log when acting on an answer fails, and leaves nothing unhandled', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      const ask = latestOnly(
+        () => Promise.resolve('Cleaned with qwen3.5:4b'),
+        () => {
+          throw new Error('the menu could not be drawn')
+        },
+      )
+      ask()
+      await settle()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
+
+    expect(unhandled).not.toHaveBeenCalled()
+    expect(logged).toHaveBeenCalledTimes(1)
+  })
+
   it('says nothing about a failure that a newer question has overtaken', async () => {
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const t = setup()

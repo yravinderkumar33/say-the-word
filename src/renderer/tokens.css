@@ -1,0 +1,209 @@
+/*
+ * The design's tokens. Every colour, size and duration the windows and the pill use
+ * is named here, and nowhere else.
+ *
+ * The windows follow the system's appearance. The pill has one look that never does:
+ * what is behind it has nothing to do with the appearance.
+ */
+:root {
+  --font: system-ui, -apple-system, 'SF Pro Text', sans-serif;
+
+  /* Motion. All three are zero with Reduce Motion. */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --ease: cubic-bezier(0.2, 0.9, 0.25, 1);
+
+  /* The pill. */
+  --pill-font: 500 12.5px/1 var(--font);
+  --pill-bg: #161618;
+  --pill-ink: #ffffff;
+  --pill-ink-2: rgb(255 255 255 / 0.68);
+  --pill-idle: rgb(255 255 255 / 0.4);
+  /* The accent. It appears only while audio is being captured. */
+  --pill-live: #3ddc84;
+  --pill-problem: #ff6961;
+  --pill-btn: rgb(255 255 255 / 0.15);
+  --pill-btn-hover: rgb(255 255 255 / 0.28);
+  --pill-btn-ink: #ffffff;
+  --pill-track: rgb(255 255 255 / 0.22);
+  --pill-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.16), 0 0 0 1.5px rgb(0 0 0 / 0.35), 0 2px 8px rgb(0 0 0 / 0.3);
+  --pill-shadow-problem:
+    0 0 0 1px rgb(255 105 97 / 0.75), 0 0 0 1.5px rgb(0 0 0 / 0.35), 0 2px 8px rgb(0 0 0 / 0.3);
+  /*
+   * The pill at rest. These two are the same in every accessibility setting: it is
+   * meant to recede, and what it offers has a shortcut and a menu item.
+   */
+  --pill-rest: rgb(22 22 24 / 0.5);
+  --pill-rest-shadow: 0 0 0 1px rgb(255 255 255 / 0.22), 0 0 0 1.5px rgb(0 0 0 / 0.22);
+  /* What the first run's picture of the pill draws it over: a light page beside a dark one. */
+  --pill-behind-light: #f2f2f0;
+  --pill-behind-dark: #2a2a2d;
+
+  /* The windows, light. */
+  --bg: #ffffff;
+  --bg-sidebar: #ececee;
+  --card: #f6f6f7;
+  --ink: #1d1d1f;
+  /* 5.8:1 on the window, 4.9:1 on the sidebar, 5.2:1 inside a chip. */
+  --ink-2: #636368;
+  --line: rgb(0 0 0 / 0.09);
+  --fill: rgb(0 0 0 / 0.055);
+  --fill-strong: rgb(0 0 0 / 0.1);
+  --fill-selected: rgb(0 0 0 / 0.08);
+  --row-hover: rgb(0 0 0 / 0.035);
+  --control: #ffffff;
+  --control-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.22), 0 1px 1.5px rgb(0 0 0 / 0.1);
+  --field: #ffffff;
+  --field-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.25), inset 0 1px 1px rgb(0 0 0 / 0.05);
+  --segment-on: #ffffff;
+  --segment-on-shadow: 0 0.5px 1.5px rgb(0 0 0 / 0.28);
+  /* The knob of a switch that is off, and the thumb of a slider: white in both appearances. */
+  --knob: #ffffff;
+  --knob-shadow: 0 0.5px 1.5px rgb(0 0 0 / 0.3);
+  --thumb-shadow: 0 0 0 0.5px rgb(0 0 0 / 0.3), 0 1px 3px rgb(0 0 0 / 0.25);
+  --key-bg: #ffffff;
+  --key-edge: rgb(0 0 0 / 0.16);
+  --key-base: rgb(0 0 0 / 0.28);
+  --prominent: #1d1d1f;
+  --on-prominent: #ffffff;
+  --live: #1c9a55;
+  --problem: #c4302b;
+  /* Amber: what you say is being saved. It is used for nothing else. */
+  --saving: #7a4200;
+  --saving-bg: #fff3dc;
+  --saving-line: #efc479;
+  --focus: #1d1d1f;
+  --focus-width: 2px;
+  --app-tile: #dcdce0;
+  --app-tile-ink: #48484a;
+  --meter-idle: rgb(0 0 0 / 0.1);
+  /* A word the cleanup took out, in the text as it was heard. */
+  --mark-removed: rgb(0 0 0 / 0.07);
+  /* Outlines that appear only with Increase Contrast. */
+  --sel-ring: 0 0 0 0 transparent;
+  --chip-ring: 0 0 0 0 transparent;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e20;
+    --bg-sidebar: #2a2a2d;
+    --card: #262629;
+    --ink: #f2f2f4;
+    --ink-2: #a1a1a6;
+    --line: rgb(255 255 255 / 0.09);
+    --fill: rgb(255 255 255 / 0.08);
+    --fill-strong: rgb(255 255 255 / 0.14);
+    --fill-selected: rgb(255 255 255 / 0.1);
+    --row-hover: rgb(255 255 255 / 0.05);
+    --control: #3a3a3d;
+    --control-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.15), 0 0 0 0.5px rgb(0 0 0 / 0.5);
+    --field: #2a2a2d;
+    --field-shadow: inset 0 0 0 0.5px rgb(255 255 255 / 0.14);
+    --segment-on: #5b5b60;
+    --segment-on-shadow: inset 0 0.5px 0 rgb(255 255 255 / 0.2);
+    --key-bg: #3a3a3d;
+    --key-edge: rgb(255 255 255 / 0.12);
+    --key-base: rgb(0 0 0 / 0.6);
+    --prominent: #f2f2f4;
+    --on-prominent: #1d1d1f;
+    --live: #3ddc84;
+    --problem: #ff6961;
+    --saving: #ffc46b;
+    --saving-bg: #3a2a10;
+    --saving-line: #7a5418;
+    --focus: #f2f2f4;
+    --app-tile: #48484c;
+    --app-tile-ink: #e5e5ea;
+    --meter-idle: rgb(255 255 255 / 0.12);
+    --mark-removed: rgb(255 255 255 / 0.1);
+  }
+}
+
+/*
+ * Increase Contrast. The active pill turns black with a white keyline, and its one
+ * action becomes white on black. In the windows every hairline, control and keycap
+ * gets a full edge, the selected row and the chips are outlined, and the focus ring
+ * grows to 3 px. The pill at rest is left exactly as it is.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --pill-bg: #000000;
+    --pill-ink-2: #ffffff;
+    --pill-idle: rgb(255 255 255 / 0.75);
+    --pill-btn: #ffffff;
+    --pill-btn-hover: #d1d1d6;
+    --pill-btn-ink: #000000;
+    --pill-track: rgb(255 255 255 / 0.5);
+    --pill-shadow: 0 0 0 1.5px #ffffff, 0 0 0 2.5px #000000;
+    --pill-shadow-problem: 0 0 0 2px #ff6961, 0 0 0 3px #000000;
+
+    --ink: #000000;
+    --ink-2: #3a3a3c;
+    --line: rgb(0 0 0 / 0.4);
+    --fill: rgb(0 0 0 / 0.08);
+    --fill-selected: rgb(0 0 0 / 0.1);
+    --sel-ring: inset 0 0 0 1px #000000;
+    --control-shadow: 0 0 0 1px #000000;
+    --segment-on-shadow: 0 0 0 1px #000000;
+    --field-shadow: inset 0 0 0 1px #000000;
+    --key-edge: #000000;
+    --key-base: #000000;
+    --chip-ring: inset 0 0 0 1px #3a3a3c;
+    --focus: #000000;
+    --focus-width: 3px;
+  }
+}
+
+@media (prefers-contrast: more) and (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ffffff;
+    --ink-2: #d1d1d6;
+    --line: rgb(255 255 255 / 0.45);
+    --fill: rgb(255 255 255 / 0.1);
+    --fill-selected: rgb(255 255 255 / 0.14);
+    --sel-ring: inset 0 0 0 1px #ffffff;
+    --control-shadow: 0 0 0 1px #ffffff;
+    --segment-on-shadow: 0 0 0 1px #ffffff;
+    --field-shadow: inset 0 0 0 1px #ffffff;
+    --key-edge: #ffffff;
+    --key-base: #ffffff;
+    --chip-ring: inset 0 0 0 1px #d1d1d6;
+    /* 7.4:1 on the window. */
+    --problem: #ff8a84;
+    --focus: #ffffff;
+  }
+}
+
+/*
+ * Reduce Motion: the pill jumps between shapes instead of growing into them. The bars
+ * still follow the voice, because that movement is the information.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-1: 0ms;
+    --dur-2: 0ms;
+    --dur-3: 0ms;
+  }
+
+  [data-motion] {
+    animation: none !important;
+  }
+}
+
+/*
+ * Reduce Transparency: the see-through details of the active pill become greys of the
+ * same value. The pill at rest is not a blur material, and making it solid would make
+ * it more prominent, so it stays as it is. The windows have nothing see-through.
+ */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --pill-ink-2: #b8b8bc;
+    --pill-idle: #68686d;
+    --pill-btn: #3a3a3e;
+    --pill-btn-hover: #4a4a4f;
+    --pill-track: #4a4a4f;
+  }
+}

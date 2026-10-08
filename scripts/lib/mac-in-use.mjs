@@ -8,11 +8,12 @@
 // power assertions: what is keeping the display awake, and what has a microphone or
 // the camera open.
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Seconds since the last key press, click or pointer movement. */
-export function idleSeconds() {
+function idleSeconds() {
   const output = spawnSync('ioreg', ['-c', 'IOHIDSystem'], { encoding: 'utf8' }).stdout
   const match = /"HIDIdleTime" = (\d+)/.exec(output)
   return match ? Number(match[1]) / 1e9 : 0
@@ -51,7 +52,7 @@ export function busyWith(assertions) {
 }
 
 /** `busyWith` for this Mac, now. */
-export function macBusyWith() {
+function macBusyWith() {
   return busyWith(spawnSync('pmset', ['-g', 'assertions'], { encoding: 'utf8' }).stdout ?? '')
 }
 
@@ -64,7 +65,7 @@ export function macBusyWith() {
  * `ignoreCalls` leaves out everything but the keyboard and the mouse, for someone who
  * runs the test knowing a call or a video is on.
  */
-export async function waitUntilFree({ idleFor, maxWaitMs, ignoreCalls = false }) {
+async function waitUntilFree({ idleFor, maxWaitMs, ignoreCalls = false }) {
   const deadline = Date.now() + maxWaitMs
   let announced = false
   /** When something was last seen going on, if it was. */
@@ -90,17 +91,72 @@ export async function waitUntilFree({ idleFor, maxWaitMs, ignoreCalls = false })
 }
 
 /**
+ * Apps that listen to the dictation key: the list in src/main/system/other-dictation-app.ts.
+ * The keys a keyboard test posts reach every app, as a keyboard's do.
+ */
+const DICTATION_APPS = ['Wispr Flow']
+
+/**
+ * The first program among these that would act on the keys a test posts, by name, or
+ * null. `processes` is the output of `ps -axo command=`, a program and its arguments to a
+ * line; `electron` is the Electron that runs this project from source.
+ *
+ * Each would record the microphone at a synthetic `Fn`, paste into the app in front, and
+ * paste its owner's last dictation into the test's document at the paste-last chord. So
+ * these count: a known dictation app; Whisper Flow in any build, however it was started;
+ * and this project run from source, as `npm run dev` runs it, unless started with
+ * `--hidden`, as the tests start their own instances.
+ */
+export function dictationAppIn(processes, electron) {
+  for (const line of processes.split('\n').map((each) => each.trim())) {
+    // The app's own executable, not the helpers it starts: those are in a bundle inside it.
+    const bundle = line.indexOf('.app/')
+    if (bundle !== -1 && line.startsWith('Contents/MacOS/', bundle + '.app/'.length)) {
+      const name = line.slice(line.lastIndexOf('/', bundle) + 1, bundle)
+      if (DICTATION_APPS.includes(name) || name.startsWith('Whisper Flow')) return name
+    }
+    const fromSource = line === electron || line.startsWith(`${electron} `)
+    if (fromSource && !/\s--hidden(\s|$)/.test(line)) {
+      // With what it was started with: this project's Electron runs other things too.
+      return `Whisper Flow run from source (electron${line.slice(electron.length)})`
+    }
+  }
+  return null
+}
+
+/** `dictationAppIn` for this Mac, now. */
+function otherDictationApp() {
+  const processes = spawnSync('ps', ['-axo', 'command='], { encoding: 'utf8' }).stdout ?? ''
+  return dictationAppIn(processes, createRequire(import.meta.url)('electron'))
+}
+
+/** Says why a keyboard test does not start beside another dictation app, if one runs. */
+function anotherAppListens() {
+  const app = otherDictationApp()
+  if (!app) return false
+  console.log(`  skip everything: ${app} is running, and would act on the keys this test presses.`)
+  console.log('  Quit it, then run this again. No switch runs the test beside it.')
+  return true
+}
+
+/**
  * For a test that takes the keyboard: true once it may start. Asked to wait for a quiet
  * keyboard (`idleFor` seconds), it waits up to a quarter of an hour for the Mac to be
  * free; otherwise it looks once. When the test may not start, this says why.
+ *
+ * Another dictation app is looked for before and after any wait, and `evenIfInUse` does
+ * not leave it out.
  */
 export async function mayTakeTheKeyboard({ idleFor, evenIfInUse = false }) {
+  // A wait that is not a number would be no wait: nothing would be checked.
+  if (!(idleFor >= 0)) throw new TypeError(`idleFor must be a number of seconds, not ${idleFor}`)
+  if (anotherAppListens()) return false
   const inTheWay = await waitUntilFree({
     idleFor,
     maxWaitMs: idleFor > 0 ? 15 * 60_000 : 0,
     ignoreCalls: evenIfInUse,
   })
-  if (!inTheWay) return true
+  if (!inTheWay) return !anotherAppListens()
   console.log(`  skip everything: ${inTheWay}.`)
   console.log(
     '  This test puts windows in front and presses keys, so it does not start while someone is using the Mac.',

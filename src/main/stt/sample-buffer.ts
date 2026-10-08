@@ -1,3 +1,4 @@
+import { MAX_AUDIO_SAMPLES } from '@shared/audio-format'
 /**
  * The audio of one recording, kept as the frames it arrived in. Slicing copies only
  * the samples asked for, so a long recording is never duplicated as one huge array.
@@ -12,7 +13,10 @@ export class SampleBuffer {
     return this.total
   }
 
+  constructor(private readonly limit = MAX_AUDIO_SAMPLES) {}
+
   append(frame: Float32Array): void {
+    if (this.total + frame.length > this.limit) throw new Error('Recording sample limit reached')
     this.frames.push(frame)
     this.starts.push(this.total)
     this.total += frame.length

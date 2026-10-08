@@ -1,3 +1,6 @@
+import CoreGraphics
+import IOKit.hidsystem
+
 /// Works out whether a modifier key went down or up from a `flagsChanged` event's flags.
 ///
 /// The generic flags (Shift, Control, Option, Command) cannot tell the left key from the
@@ -11,26 +14,28 @@
 /// decides. So it does for Fn, which has no per-key bit at all.
 public enum ModifierState {
     static let deviceBits: [Int: UInt64] = [
-        KeyCode.leftControl: 0x0001,
-        KeyCode.leftShift: 0x0002,
-        KeyCode.rightShift: 0x0004,
-        KeyCode.leftCommand: 0x0008,
-        KeyCode.rightCommand: 0x0010,
-        KeyCode.leftOption: 0x0020,
-        KeyCode.rightOption: 0x0040,
-        KeyCode.rightControl: 0x2000,
+        KeyCode.leftControl: UInt64(NX_DEVICELCTLKEYMASK),
+        KeyCode.leftShift: UInt64(NX_DEVICELSHIFTKEYMASK),
+        KeyCode.rightShift: UInt64(NX_DEVICERSHIFTKEYMASK),
+        KeyCode.leftCommand: UInt64(NX_DEVICELCMDKEYMASK),
+        KeyCode.rightCommand: UInt64(NX_DEVICERCMDKEYMASK),
+        KeyCode.leftOption: UInt64(NX_DEVICELALTKEYMASK),
+        KeyCode.rightOption: UInt64(NX_DEVICERALTKEYMASK),
+        KeyCode.rightControl: UInt64(NX_DEVICERCTLKEYMASK),
     ]
 
-    static let genericBits: [Int: UInt64] = [
-        KeyCode.leftShift: 0x0002_0000,
-        KeyCode.rightShift: 0x0002_0000,
-        KeyCode.leftControl: 0x0004_0000,
-        KeyCode.rightControl: 0x0004_0000,
-        KeyCode.leftOption: 0x0008_0000,
-        KeyCode.rightOption: 0x0008_0000,
-        KeyCode.leftCommand: 0x0010_0000,
-        KeyCode.rightCommand: 0x0010_0000,
-        KeyCode.function: 0x0080_0000,
+    /// The flag each modifier key sets, whichever key of a pair it is. The test tool that
+    /// posts key events sets the same ones.
+    public static let genericBits: [Int: UInt64] = [
+        KeyCode.leftShift: CGEventFlags.maskShift.rawValue,
+        KeyCode.rightShift: CGEventFlags.maskShift.rawValue,
+        KeyCode.leftControl: CGEventFlags.maskControl.rawValue,
+        KeyCode.rightControl: CGEventFlags.maskControl.rawValue,
+        KeyCode.leftOption: CGEventFlags.maskAlternate.rawValue,
+        KeyCode.rightOption: CGEventFlags.maskAlternate.rawValue,
+        KeyCode.leftCommand: CGEventFlags.maskCommand.rawValue,
+        KeyCode.rightCommand: CGEventFlags.maskCommand.rawValue,
+        KeyCode.function: CGEventFlags.maskSecondaryFn.rawValue,
     ]
 
     static let anyDeviceBit: UInt64 = deviceBits.values.reduce(0, |)

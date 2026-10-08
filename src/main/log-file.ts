@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync, truncateSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { format } from 'node:util'
 
@@ -33,6 +33,28 @@ export class LogFile {
     return join(dirname(this.path), 'main.old.log')
   }
 
+  /** How much the log takes up on disk, the one before it included. */
+  get bytesOnDisk(): number {
+    return sizeOf(this.path) + sizeOf(this.previousPath)
+  }
+
+  /**
+   * Deletes the log and the one before it. The next line starts a new file. Returns
+   * false when a file could not be removed.
+   */
+  clear(): boolean {
+    let removed = true
+    for (const path of [this.path, this.previousPath]) {
+      try {
+        rmSync(path, { force: true })
+      } catch {
+        removed = false
+      }
+    }
+    this.bytes = sizeOf(this.path)
+    return removed
+  }
+
   write(text: string): void {
     const stamp = timestamp(this.now())
     // One entry may span lines (an error with its stack); each gets the time.
@@ -40,14 +62,7 @@ export class LogFile {
       .split('\n')
       .map((line) => `${stamp} ${line}\n`)
       .join('')
-    if (this.bytes > 0 && this.bytes + Buffer.byteLength(entry) > this.maxBytes) {
-      try {
-        renameSync(this.path, this.previousPath)
-      } catch {
-        // The file is gone (someone moved or deleted it): there is nothing to keep.
-      }
-      this.bytes = 0
-    }
+    if (this.bytes > 0 && this.bytes + Buffer.byteLength(entry) > this.maxBytes) this.rotate()
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       appendFileSync(this.path, entry)
@@ -56,6 +71,32 @@ export class LogFile {
       // A log that cannot be written must never take the app down with it. This line
       // is lost; the next one is tried again, because the cause may have passed.
     }
+  }
+
+  /** Moves the full file aside, to start afresh. */
+  private rotate(): void {
+    try {
+      renameSync(this.path, this.previousPath)
+    } catch (error) {
+      // The file is gone (someone moved or deleted it): there is nothing to keep. Anything
+      // else is in the way of the old file: it is removed and the move tried again, and
+      // failing that the file is emptied where it is. A folder is not removed: it is not
+      // the log's.
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        try {
+          rmSync(this.previousPath, { force: true })
+          renameSync(this.path, this.previousPath)
+        } catch {
+          try {
+            truncateSync(this.path)
+          } catch {
+            // Neither: the file stays full, and the next line tries again.
+          }
+        }
+      }
+    }
+    // Counted from what is there: started afresh only if the file really was moved or emptied.
+    this.bytes = sizeOf(this.path)
   }
 }
 
@@ -79,6 +120,20 @@ export function mirrorConsoleTo(file: LogFile): () => void {
     console.warn = original.warn
     console.error = original.error
   }
+}
+
+/**
+ * An error nobody expected, as the log may keep it: what kind it is and where it was
+ * thrown, without its message. The message can quote what the failing code was given
+ * (`JSON.parse` quotes the text it could not read), and that can be what someone said.
+ */
+export function kindAndPlace(error: unknown): string {
+  if (!(error instanceof Error)) return `something that is not an error (${typeof error})`
+  const frames = (error.stack ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('at '))
+  return [error.name, ...frames].join('\n    ')
 }
 
 function sizeOf(path: string): number {

@@ -38,7 +38,6 @@ public enum SecureFieldPolicy {
         elementIsSecure: Bool,
         secureInputEnabled: Bool,
         secureInputHolderPid: Int32?,
-        secureInputLeftOn: Bool = false,
         frontmostPid: Int32,
         bundleId: String?
     ) -> Bool {
@@ -46,7 +45,6 @@ public enum SecureFieldPolicy {
             elementIsSecure: elementIsSecure,
             secureInputEnabled: secureInputEnabled,
             secureInputHolderPid: secureInputHolderPid,
-            secureInputLeftOn: secureInputLeftOn,
             frontmostPid: frontmostPid,
             bundleId: bundleId
         ) != nil
@@ -67,12 +65,11 @@ public enum SecureFieldPolicy {
     /// Which signal marked the field as a password field: `element` (its accessibility
     /// role) or `secureInput` (Secure Event Input held by the frontmost app). Nil when
     /// it is not one. This is what the log shows when a paste is refused for it.
-    /// `secureInputLeftOn` is diagnostic context and never relaxes this decision.
+    /// It is given no history: what earlier readings saw (`isStuck`) never relaxes it.
     public static func reason(
         elementIsSecure: Bool,
         secureInputEnabled: Bool,
         secureInputHolderPid: Int32?,
-        secureInputLeftOn _: Bool = false,
         frontmostPid: Int32,
         bundleId: String?
     ) -> String? {

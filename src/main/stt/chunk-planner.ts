@@ -41,7 +41,10 @@ export class ChunkPlanner {
   addSpeech(speech: SampleRange): SampleRange[] {
     this.speechSeen = true
     const ready: SampleRange[] = []
-    if (this.group && speech.end - this.group.start > this.options.maxChunkSamples) {
+    // The padding counts towards the limit: a chunk that only its padding takes past it
+    // would be cut, and its last words decoded on their own.
+    const { maxChunkSamples, padBefore, padAfter } = this.options
+    if (this.group && speech.end - this.group.start > maxChunkSamples - padBefore - padAfter) {
       ready.push(this.close(this.group, speech.start))
       this.group = null
     }

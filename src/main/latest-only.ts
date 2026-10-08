@@ -16,17 +16,22 @@ export function latestOnly<Answer>(
   let askings = 0
   return () => {
     const asking = ++askings
-    ask().then(
-      (answer) => {
-        if (asking === askings) act(answer)
-      },
-      (error: unknown) => {
-        // A question that could not be answered changes nothing; the next one may be.
-        if (asking === askings) {
-          console.error('[app] a status could not be read:', describe(error))
-        }
-      },
-    )
+    void ask()
+      .then(
+        (answer) => {
+          if (asking === askings) act(answer)
+        },
+        (error: unknown) => {
+          // A question that could not be answered changes nothing; the next one may be.
+          if (asking === askings) {
+            console.error('[app] a status could not be read:', describe(error))
+          }
+        },
+      )
+      // An answer that could not be acted on is said too, and left for the next one.
+      .catch((error: unknown) =>
+        console.error('[app] a status could not be shown:', describe(error)),
+      )
   }
 }
 

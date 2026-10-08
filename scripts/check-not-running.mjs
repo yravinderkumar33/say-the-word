@@ -2,8 +2,8 @@
 //
 // `npm run pack` replaces and re-signs that bundle. Doing so underneath a running copy
 // changes the code the copy is executing: it can crash, and it will not pick up the new
-// build either. Tests started by the scripts themselves are children of this process
-// tree and are not what this looks for; a copy opened from Finder or with `open` is.
+// build either. Every copy running from there counts, whoever started it: one opened from
+// Finder or with `open`, and one a test started (`npm run test:app -- --packaged`).
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'

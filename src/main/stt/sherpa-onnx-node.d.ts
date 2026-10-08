@@ -55,7 +55,6 @@ declare module 'sherpa-onnx-node' {
     constructor(config: VadConfig, bufferSizeInSeconds: number)
     acceptWaveform(samples: Float32Array): void
     isEmpty(): boolean
-    isDetected(): boolean
     pop(): void
     /** Pass `false`: Electron rejects the external buffers the default would return. */
     front(enableExternalBuffer?: boolean): SpeechSegment

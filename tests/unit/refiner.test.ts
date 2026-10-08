@@ -16,7 +16,6 @@ const reply = (content: string, extra: Partial<ChatResult> = {}): ChatResult => 
   doneReason: 'stop',
   remote: false,
   firstTokenMs: 300,
-  totalMs: 900,
   outputTokens: 20,
   generationMs: 500,
   loadMs: 0,
@@ -242,6 +241,69 @@ describe('Refiner', () => {
     expect(performance.now() - started).toBeGreaterThan(1_000)
   })
 
+  it('says how long a dictation would have allowed, so that a slower answer can be told as such', async () => {
+    const t = setup()
+    t.state.answer = answers(CLEAN)
+
+    const result = await t.run(SPOKEN)
+
+    // One second plus one and a half times the time the model needs to write it.
+    expect(result.allowedMs).toBeGreaterThan(1_000)
+    expect(result.allowedMs).toBeLessThanOrEqual(4_000)
+    // A text that is not sent to the model has the whole ceiling as its allowance.
+    expect((await t.run('yes please')).allowedMs).toBe(4_000)
+  })
+
+  it('waits for a slow model when a sentence is only being tried, and reports the time it took', async () => {
+    const t = setup({ ceilingMs: 1_200, realClock: true })
+    // Slower than any dictation would wait for, and it does answer in the end.
+    t.state.answer = (request) =>
+      new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(reply('Send the report to the team today, please.')),
+          1_500,
+        )
+        request.signal?.addEventListener('abort', () => {
+          clearTimeout(timer)
+          reject(new OllamaError('aborted', 'The request was cancelled'))
+        })
+      })
+    const sentence = 'send the report to the team today please'
+
+    // A dictation gives up at its deadline and pastes the rules-only text.
+    expect(await t.run(sentence)).toMatchObject({ note: 'timeout', cleaned: null })
+
+    const tried = await t.refiner.refine(sentence, new AbortController().signal, { patient: true })
+
+    expect(tried.note).toBe('cleaned')
+    expect(tried.cleaned).toBe('Send the report to the team today, please.')
+    expect(tried.cleanupMs).toBeGreaterThan(tried.allowedMs)
+    expect(tried.tooLongForDictation).toBeUndefined()
+  })
+
+  it('says when a sentence that was tried is too long for any dictation', async () => {
+    const t = setup()
+    // Long enough that a model of the usual speed could not write it within the ceiling.
+    const sentence = Array.from({ length: 12 }, () => 'send the quarterly report to the team').join(
+      ' and ',
+    )
+    t.state.answer = (request) => Promise.resolve(reply(transcriptOf(request)))
+
+    expect((await t.run(sentence)).note).toBe('tooLong')
+    const tried = await t.refiner.refine(sentence, new AbortController().signal, { patient: true })
+    expect(tried).toMatchObject({ note: 'cleaned', tooLongForDictation: true })
+  })
+
+  it('still warms the model up before a sentence that is being tried', async () => {
+    const t = setup()
+    t.state.answer = answers(CLEAN)
+
+    await t.refiner.refine(SPOKEN, new AbortController().signal, { patient: true })
+
+    // The instructions first, and only then the sentence: as for any dictation.
+    expect(t.calls.sent).toEqual(['warm', 'chat'])
+  })
+
   it('caps the reply at a little more than the transcript', async () => {
     const t = setup()
     t.state.answer = answers(CLEAN)
@@ -261,6 +323,52 @@ describe('Refiner', () => {
     }
 
     expect((await t.run(SPOKEN)).note).toBe('guard:invented')
+  })
+
+  it('takes no approval from a reply it gave up on', async () => {
+    const t = setup()
+    t.state.answer = answers(CLEAN)
+    await t.run(SPOKEN)
+    t.state.clock = 4 * 60_000
+    t.state.answer = (request) => {
+      const keepGoing = request.onContent?.('I am sorry, but as an AI model I cannot')
+      return Promise.resolve(reply('', { doneReason: keepGoing === false ? 'abandoned' : 'stop' }))
+    }
+    await t.run(SPOKEN)
+    // Eight minutes after the last reply that finished: the approval has run out.
+    t.state.clock = 8 * 60_000
+    t.state.answer = answers(CLEAN)
+    await t.run(SPOKEN)
+
+    expect(t.calls.sent).toEqual(['warm', 'chat', 'chat', 'warm', 'chat'])
+  })
+
+  // "constructor" is a property of every plain object: looked up in one by what was
+  // said, it once came back as a function and broke the comparison of words.
+  it.each([[[]], [[{ from: 'cube ernetes', to: 'Kubernetes' }]]])(
+    'cleans a transcript that says "constructor" (dictionary %j)',
+    async (dictionary: DictionaryEntry[]) => {
+      const t = setup({ dictionary })
+      t.state.answer = answers('Call the constructor before the factory runs.')
+
+      const result = await t.run('call the constructor before the factory runs')
+      expect(result).toMatchObject({ note: 'cleaned' })
+    },
+  )
+
+  it('still answers with the rules-only text when something inside it throws', async () => {
+    const t = setup()
+    t.state.answer = answers(CLEAN)
+    Object.defineProperty(t.state, 'model', {
+      get: () => {
+        throw new TypeError('a mistake of our own')
+      },
+    })
+
+    const result = await t.run(SPOKEN)
+    expect(result).toMatchObject({ note: 'failed', cleaned: null })
+    expect(result.final).toBe(result.rules)
+    expect(result.final.length).toBeGreaterThan(0)
   })
 
   it.each([
@@ -820,5 +928,93 @@ describe('the prompt', () => {
     const transcript = vocabulary.join(' ')
 
     expect(relevantVocabulary(transcript, vocabulary)).toHaveLength(12)
+  })
+})
+
+describe('verified identity estimates (QA-09)', () => {
+  it('patient comparison bypasses a slow estimate; another model/digest/server has its own estimate', async () => {
+    const t = setup()
+    t.state.answer = answers(CLEAN, { outputTokens: 1, generationMs: 900000, firstTokenMs: 900000 })
+    await t.run(SPOKEN)
+    expect((await t.run(SPOKEN)).note).toBe('tooLong')
+    t.state.answer = answers(CLEAN)
+    expect(
+      (await t.refiner.refine(SPOKEN, new AbortController().signal, { patient: true })).note,
+    ).toBe('cleaned')
+    t.state.digest = 'new-digest'
+    expect((await t.run(SPOKEN)).note).toBe('cleaned')
+    t.state.model = 'other:latest'
+    expect((await t.run(SPOKEN)).note).toBe('cleaned')
+    t.state.url = 'http://127.0.0.1:9000'
+    expect((await t.run(SPOKEN)).note).toBe('cleaned')
+  })
+  it('allows one normal-deadline remeasurement after thirty seconds', async () => {
+    const t = setup()
+    t.state.answer = answers(CLEAN, { outputTokens: 1, generationMs: 900000, firstTokenMs: 900000 })
+    await t.run(SPOKEN)
+    expect((await t.run(SPOKEN)).note).toBe('tooLong')
+    t.state.clock = 30001
+    t.state.answer = answers(CLEAN)
+    expect((await t.run(SPOKEN)).note).toBe('cleaned')
+    expect(t.calls.chat).toHaveLength(2)
+  })
+  it('a short text waits no longer than it is allowed for a model that is still loading', async () => {
+    const t = setup({ realClock: true })
+    // The model was unloaded: answering the warm-up takes three seconds.
+    t.state.warm = () => new Promise((resolve) => setTimeout(() => resolve(LOCAL), 3_000))
+    const began = performance.now()
+    const refined = await t.run(SPOKEN)
+
+    expect(refined.note).toBe('timeout')
+    // Its own allowance (about 1.9 s for this sentence), not the whole ceiling.
+    expect(performance.now() - began).toBeLessThan(2_500)
+    expect(refined.allowedMs).toBeLessThan(2_500)
+    expect(t.calls.chat).toHaveLength(0)
+  })
+  it('a text too long for any model of the usual speed is refused at once, and nothing is asked', async () => {
+    const t = setup()
+    const long = Array.from({ length: 120 }, (_, i) => `word${i}`).join(' ')
+    expect((await t.run(long)).note).toBe('tooLong')
+    // Not once, and not after a while: no model is ever kept waiting for it.
+    t.state.clock = 120_000
+    expect((await t.run(long)).note).toBe('tooLong')
+    expect(t.calls.checked).toHaveLength(0)
+    expect(t.calls.chat).toHaveLength(0)
+  })
+  it('a model measured again and still too slow is measured again later each time', async () => {
+    const t = setup({ ceilingMs: 1_000 })
+    const said = 'um so this is the plan'
+    const tidy = 'So this is the plan.'
+    t.state.answer = answers(tidy, { outputTokens: 1, generationMs: 900000, firstTokenMs: 900000 })
+    await t.run(said)
+    expect((await t.run(said)).note).toBe('tooLong')
+    // Thirty seconds on it is measured again, and does not answer within the ceiling.
+    t.state.answer = (request) =>
+      new Promise((_resolve, reject) =>
+        request.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+      )
+    t.state.clock = 30_001
+    expect((await t.run(said)).note).toBe('timeout')
+    // Thirty seconds after that is too soon now; sixty is not.
+    t.state.clock = 60_002
+    expect((await t.run(said)).note).toBe('tooLong')
+    t.state.clock = 90_002
+    t.state.answer = answers(tidy)
+    expect((await t.run(said)).note).toBe('cleaned')
+    // Answered in time: what was measured before is replaced, not averaged with it.
+    expect((await t.run(said)).note).toBe('cleaned')
+  })
+  it('bounds the estimate cache and expires observations after five minutes', async () => {
+    const t = setup()
+    for (let i = 0; i < 20; i++) {
+      t.state.digest = String(i)
+      await t.run(SPOKEN)
+    }
+    expect(t.refiner['speeds'].size).toBe(16)
+    t.state.answer = answers(CLEAN, { outputTokens: 1, generationMs: 900000 })
+    await t.run(SPOKEN)
+    t.state.clock = 300001
+    t.state.answer = answers(CLEAN)
+    expect((await t.run(SPOKEN)).note).toBe('cleaned')
   })
 })

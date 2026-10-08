@@ -44,7 +44,25 @@ export interface Refined {
   note: CleanupNote
   /** How long cleanup took, model included. */
   cleanupMs: number
+  /** How long a dictation gives cleanup for a text of this length. */
+  allowedMs: number
+  /**
+   * A dictation this long gets the rules-only text without the model being asked. Only
+   * a patient comparison is tried all the same, and it should not look usable.
+   */
+  tooLongForDictation?: true
 }
+
+export interface RefineOptions {
+  /**
+   * "Try it": the model is waited for well beyond what a dictation allows, so that a
+   * slow one can be shown with the time it took. Never set for a dictation.
+   */
+  patient?: boolean
+}
+
+/** How long a patient run waits. A model that has said nothing by then is not going to. */
+const PATIENT_MS = 20_000
 
 export interface RefinerDeps {
   client: Pick<OllamaClient, 'chat' | 'warm' | 'url'>
@@ -60,6 +78,28 @@ export interface RefinerDeps {
 
 /** Room left in the context beyond the prompt and the reply. */
 const CONTEXT_MARGIN = 64
+/** What a model is taken to do until it has been measured: measured on the development machine. */
+const USUAL_FIRST_TOKEN_MS = 600
+const USUAL_TOKENS_PER_SECOND = 23
+/** How long a measurement of a model's speed stands without being renewed. */
+const SPEED_STANDS_MS = 5 * 60_000
+/**
+ * A model measured as too slow is measured again after this long, and after twice as
+ * long each time it turns out to be slow still, up to the time a measurement stands.
+ */
+const REMEASURE_AFTER_MS = 30_000
+/** How many models' speeds are remembered. */
+const SPEEDS_KEPT = 16
+
+interface Speed {
+  firstTokenMs: number
+  tokensPerSecond: number
+  /** When it was last measured. */
+  at: number
+  /** When it was last measured again because it seemed too slow, and how long until the next time. */
+  probeAt: number
+  probeAfterMs: number
+}
 /**
  * How long a reply from a model counts. While it does, the model is taken to be loaded
  * and to run where that reply said it does, and it is not warmed up again.
@@ -72,7 +112,7 @@ const IDENTITY_ATTEMPTS = 3
  * development machine; a server that accepts the request and then says nothing must not
  * be waited on for good.
  */
-export const WARM_TIMEOUT_MS = 20_000
+const WARM_TIMEOUT_MS = 20_000
 
 /**
  * Turns a raw transcript into the text to paste in Cleaned mode: rules first, then the
@@ -80,9 +120,13 @@ export const WARM_TIMEOUT_MS = 20_000
  * rules-only text is the answer, and it is always on time.
  */
 export class Refiner {
-  // Starting values measured on the development machine; replaced by what is observed.
-  private firstTokenMs = 600
-  private tokensPerSecond = 23
+  /** What each model has been measured to do, by verified server, canonical name and digest. */
+  private readonly speeds = new Map<string, Speed>()
+  /**
+   * The identity last verified for a model's name on a server. A dictation's time is
+   * worked out before the name is checked again, and a name's digest seldom changes.
+   */
+  private readonly lastVerified = new Map<string, string>()
   /** Positive replies, by verified server, canonical name and digest. */
   private readonly answered = new Map<string, number>()
   /** Warm-ups on their way, for the same verified identity only. */
@@ -176,10 +220,44 @@ export class Refiner {
     return at !== undefined && this.now() - at < WARM_FOR_MS
   }
 
-  async refine(raw: string, signal: AbortSignal): Promise<Refined> {
+  /**
+   * Always an answer: whatever happens on the way, the rules-only text is the fallback,
+   * and what was heard should the rules themselves fail. A dictation whose text never
+   * came back would lose what was said altogether, the heard words included.
+   */
+  async refine(raw: string, signal: AbortSignal, options: RefineOptions = {}): Promise<Refined> {
+    const started = this.now()
+    try {
+      return await this.tidy(raw, signal, options)
+    } catch (error) {
+      // Nothing in tidy is meant to throw. The log names the kind of error, never the text.
+      console.error(
+        `[cleanup] used the rules-only text after an error (${error instanceof Error ? error.name : 'unknown'})`,
+      )
+      let rules = raw
+      try {
+        rules = applyRules(raw, this.deps.dictionary())
+      } catch {
+        // Then what was heard is the answer.
+      }
+      return {
+        raw,
+        rules,
+        cleaned: null,
+        final: rules,
+        note: 'failed',
+        cleanupMs: Math.round(this.now() - started),
+        allowedMs: this.ceilingMs,
+      }
+    }
+  }
+
+  private async tidy(raw: string, signal: AbortSignal, options: RefineOptions): Promise<Refined> {
     const started = this.now()
     const dictionary = this.deps.dictionary()
     const rules = applyRules(raw, dictionary)
+    let allowedMs = this.ceilingMs
+    let tooLongForDictation = false
     const done = (note: CleanupNote, cleaned: string | null = null): Refined => ({
       raw,
       rules,
@@ -187,6 +265,8 @@ export class Refiner {
       final: cleaned ?? rules,
       note,
       cleanupMs: Math.round(this.now() - started),
+      allowedMs: Math.round(allowedMs),
+      ...(tooLongForDictation ? { tooLongForDictation: true as const } : {}),
     })
 
     const words = splitWords(rules)
@@ -202,12 +282,19 @@ export class Refiner {
     const messages = buildMessages(rules, vocabulary)
     const expectedTokens = estimateTokens(rules)
     const numPredict = Math.ceil(expectedTokens * 1.3) + 24
-    const writingMs = (expectedTokens / this.tokensPerSecond) * 1_000
-    if (this.firstTokenMs + writingMs > this.ceilingMs) return done('tooLong')
     if (promptTokens(messages) + numPredict > NUM_CTX - CONTEXT_MARGIN) return done('tooLong')
 
-    // Everything from here on, the waiting included, has to fit into this.
-    const budgetMs = Math.min(1_000 + 1.5 * writingMs, this.ceilingMs)
+    // A text that a model of the usual speed could not write in time is too long, and
+    // trying would only keep the person waiting. A comparison on the Cleanup page has
+    // its own, longer time, and is never refused for it, but its result says so.
+    tooLongForDictation = this.usualMs(expectedTokens) > this.ceilingMs
+    if (!options.patient && tooLongForDictation) return done('tooLong')
+    // Everything from here on, the waiting included, has to fit into this: worked out at
+    // the speed last measured for this name, so that a text allowed little time does not
+    // wait longer than that for a model that is loading.
+    let writingMs = (expectedTokens / this.knownSpeed(model).tokensPerSecond) * 1_000
+    allowedMs = Math.min(1_000 + 1.5 * writingMs, this.ceilingMs)
+    const budgetMs = options.patient ? Math.max(PATIENT_MS, allowedMs) : allowedMs
     const left = (): number => budgetMs - (this.now() - started)
     const preparation = AbortSignal.timeout(Math.max(1, Math.ceil(left())))
     const lifetime = AbortSignal.any([signal, preparation])
@@ -255,8 +342,24 @@ export class Refiner {
     }
     if (!verified || verified.server !== this.deps.client.url) return done('failed')
     const key = identityKey(verified)
-
-    const deadlineMs = left()
+    this.noteVerified(model, key)
+    // Can this model, as measured, write it in time? What was measured may be out of date
+    // (a model that was loading, a Mac that was busy): it is measured again now and then,
+    // rather than taken as the last word for good.
+    const speed = this.speedOf(key)
+    writingMs = (expectedTokens / speed.tokensPerSecond) * 1_000
+    let remeasure = false
+    if (!options.patient && speed.firstTokenMs + writingMs > this.ceilingMs) {
+      if (this.now() - Math.max(speed.at, speed.probeAt) < speed.probeAfterMs)
+        return done('tooLong')
+      speed.probeAt = this.now()
+      remeasure = true
+    } else if (!options.patient) {
+      allowedMs = Math.min(allowedMs, 1_000 + 1.5 * writingMs)
+    }
+    const deadlineMs = options.patient
+      ? left()
+      : Math.min(left(), (remeasure ? this.ceilingMs : allowedMs) - (this.now() - started))
     if (deadlineMs <= 0 || lifetime.aborted) return done('timeout')
     // A whole number of milliseconds: the timer accepts nothing else.
     const deadline = AbortSignal.timeout(Math.ceil(deadlineMs))
@@ -276,10 +379,12 @@ export class Refiner {
         this.answered.delete(key)
         return done('notLocal:blocked')
       }
-      // A reply from this machine: the model stays answered-for while it is in use.
-      this.answered.set(key, this.now())
+      // A reply given up on never reached its last line, and a reply that did not finish
+      // says nothing about where it ran: it approves nothing.
       if (reply.doneReason === 'abandoned') return done('guard:invented')
-      this.learnSpeed(reply)
+      // A finished reply from this machine: the model stays answered-for while it is in use.
+      this.answered.set(key, this.now())
+      this.learnSpeed(key, reply, remeasure)
 
       const cleaned = reply.content.trim()
       const judged = checkCleanup({
@@ -291,7 +396,11 @@ export class Refiner {
       return judged.ok ? done('cleaned', cleaned) : done(`guard:${judged.reason}`)
     } catch (error) {
       if (signal.aborted) return done('cancelled')
-      if (lifetime.aborted || deadline.aborted) return done('timeout')
+      if (lifetime.aborted || deadline.aborted) {
+        // Measured again and still too slow: the next time is put off further.
+        if (remeasure) this.slowStill(key)
+        return done('timeout')
+      }
       if (error instanceof OllamaError && error.kind === 'redirect') {
         // The server wanted the request taken somewhere else. It was not.
         this.deps.gate.sawRedirect(verified.server)
@@ -303,21 +412,81 @@ export class Refiner {
     }
   }
 
+  /** How long a model of the usual speed takes to write this many tokens, its wait included. */
+  private usualMs(tokens: number): number {
+    return USUAL_FIRST_TOKEN_MS + (tokens / USUAL_TOKENS_PER_SECOND) * 1_000
+  }
+
+  /** The speed of the identity last verified for this name on this server, or the usual one. */
+  private knownSpeed(model: string): Speed {
+    const key = this.lastVerified.get(`${this.deps.client.url}\n${model}`)
+    return key ? this.speedOf(key) : this.usualSpeed()
+  }
+
+  private noteVerified(model: string, key: string): void {
+    const name = `${this.deps.client.url}\n${model}`
+    this.lastVerified.delete(name)
+    this.lastVerified.set(name, key)
+    while (this.lastVerified.size > SPEEDS_KEPT)
+      this.lastVerified.delete(this.lastVerified.keys().next().value!)
+  }
+
+  private usualSpeed(): Speed {
+    return {
+      firstTokenMs: USUAL_FIRST_TOKEN_MS,
+      tokensPerSecond: USUAL_TOKENS_PER_SECOND,
+      at: this.now(),
+      probeAt: -Infinity,
+      probeAfterMs: REMEASURE_AFTER_MS,
+    }
+  }
+
+  /** What a model was measured to do, while that stands; the usual speed otherwise. */
+  private speedOf(key: string): Speed {
+    const old = this.speeds.get(key)
+    if (old && this.now() - old.at < SPEED_STANDS_MS) {
+      this.speeds.delete(key)
+      this.speeds.set(key, old)
+      return old
+    }
+    const next = this.usualSpeed()
+    this.speeds.delete(key)
+    this.speeds.set(key, next)
+    while (this.speeds.size > SPEEDS_KEPT) this.speeds.delete(this.speeds.keys().next().value!)
+    return next
+  }
+
+  /** A model measured again was still too slow to finish: measured again later than before. */
+  private slowStill(key: string): void {
+    const speed = this.speedOf(key)
+    speed.probeAfterMs = Math.min(SPEED_STANDS_MS, speed.probeAfterMs * 2)
+  }
+
   /** Remembers how fast this model really is, for the next "can it finish in time?". */
-  private learnSpeed(reply: {
-    firstTokenMs: number | null
-    outputTokens: number | null
-    generationMs: number | null
-    loadMs: number | null
-  }): void {
+  private learnSpeed(
+    key: string,
+    reply: {
+      firstTokenMs: number | null
+      outputTokens: number | null
+      generationMs: number | null
+      loadMs: number | null
+    },
+    remeasured: boolean,
+  ): void {
+    const speed = this.speedOf(key)
+    speed.at = this.now()
+    // Measured again because it seemed slow, and it answered in time: what was measured
+    // before was out of date, and is replaced, not averaged with what is true now.
+    const weight = remeasured ? 1 : 0.3
     // A request that had to load the model says nothing about the usual wait.
     if (reply.firstTokenMs !== null && (reply.loadMs ?? 0) < 200) {
-      this.firstTokenMs = 0.7 * this.firstTokenMs + 0.3 * reply.firstTokenMs
+      speed.firstTokenMs = (1 - weight) * speed.firstTokenMs + weight * reply.firstTokenMs
     }
     if (reply.outputTokens && reply.generationMs && reply.outputTokens >= 8) {
       const measured = reply.outputTokens / (reply.generationMs / 1_000)
-      this.tokensPerSecond = 0.7 * this.tokensPerSecond + 0.3 * measured
+      speed.tokensPerSecond = (1 - weight) * speed.tokensPerSecond + weight * measured
     }
+    if (remeasured) speed.probeAfterMs = REMEASURE_AFTER_MS
   }
 }
 

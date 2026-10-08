@@ -1,8 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { LogFile, mirrorConsoleTo } from '../../src/main/log-file'
+import { kindAndPlace, LogFile, mirrorConsoleTo } from '../../src/main/log-file'
 
 let dir: string
 const at = new Date(2026, 9, 3, 22, 7, 5, 142)
@@ -81,6 +89,20 @@ describe('LogFile', () => {
     expect(readFileSync(file.path, 'utf8')).toContain('c'.repeat(20))
   })
 
+  it('stays within its size when the file before it cannot be replaced', () => {
+    // A folder where the old log goes: the full file cannot be moved there.
+    mkdirSync(join(dir, 'main.old.log'))
+    writeFileSync(join(dir, 'main.old.log', 'kept'), 'x')
+    const file = new LogFile(join(dir, 'main.log'), 200, () => at)
+
+    for (let line = 0; line < 40; line++) file.write(`[probe] line ${line} ${'.'.repeat(20)}`)
+
+    expect(statSync(file.path).size).toBeLessThanOrEqual(200)
+    expect(readFileSync(file.path, 'utf8')).toContain('[probe] line 39')
+    // What is in the way is not the log's to delete.
+    expect(readFileSync(join(dir, 'main.old.log', 'kept'), 'utf8')).toBe('x')
+  })
+
   it('writes again once the cause of a failed write has passed', () => {
     // A file where the folder should be, then the folder itself.
     writeFileSync(join(dir, 'logs'), '')
@@ -102,6 +124,27 @@ describe('LogFile', () => {
       file.write('one')
       file.write('two')
     }).not.toThrow()
+  })
+})
+
+describe('kindAndPlace', () => {
+  it('says what kind of error it was and where, and nothing of what it quotes', () => {
+    let thrown: unknown
+    try {
+      JSON.parse('the words someone said')
+    } catch (error) {
+      thrown = error
+    }
+
+    const described = kindAndPlace(thrown)
+
+    expect(described.startsWith('SyntaxError\n    at ')).toBe(true)
+    expect(described).toContain('log-file.test.ts')
+    expect(described).not.toContain('someone said')
+  })
+
+  it('names something thrown that is not an error by its type only', () => {
+    expect(kindAndPlace('the words someone said')).toBe('something that is not an error (string)')
   })
 })
 

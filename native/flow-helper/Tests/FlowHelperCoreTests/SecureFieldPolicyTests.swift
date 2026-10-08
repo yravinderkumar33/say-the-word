@@ -111,7 +111,6 @@ struct SecureFieldPolicyTests {
             elementIsSecure: false,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputLeftOn: true,
             frontmostPid: Self.browser,
             bundleId: "com.microsoft.VSCode"
         )
@@ -138,7 +137,6 @@ struct SecureFieldPolicyTests {
             elementIsSecure: false,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputLeftOn: history.leftOn,
             frontmostPid: Self.browser,
             bundleId: "com.brave.Browser"
         )
@@ -165,7 +163,6 @@ struct SecureFieldPolicyTests {
             elementIsSecure: false,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputLeftOn: history.leftOn,
             frontmostPid: Self.browser,
             bundleId: "com.google.Chrome"
         )
@@ -187,7 +184,6 @@ struct SecureFieldPolicyTests {
             elementIsSecure: false,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputLeftOn: history.leftOn,
             frontmostPid: Self.browser,
             bundleId: "com.google.Chrome"
         )
@@ -201,7 +197,6 @@ struct SecureFieldPolicyTests {
             elementIsSecure: true,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputLeftOn: true,
             frontmostPid: Self.browser,
             bundleId: "com.apple.Safari"
         )
@@ -214,7 +209,6 @@ struct SecureFieldPolicyTests {
             elementIsSecure: true,
             secureInputEnabled: true,
             secureInputHolderPid: Self.browser,
-            secureInputLeftOn: true,
             frontmostPid: Self.browser,
             bundleId: "com.apple.Terminal"
         )

@@ -70,3 +70,10 @@ describe('fixRecognizerArtifacts', () => {
     )
   })
 })
+
+it('enforces its sample boundary without accepting a partial oversized frame', () => {
+  const buffer = new SampleBuffer(4)
+  buffer.append(new Float32Array(3))
+  expect(() => buffer.append(new Float32Array(2))).toThrow('Recording sample limit reached')
+  expect(buffer.length).toBe(3)
+})

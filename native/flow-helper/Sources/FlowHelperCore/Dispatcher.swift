@@ -10,7 +10,7 @@ public protocol HelperActions {
     /// `expiresAtMs`: when the app stops waiting for this paste, in milliseconds since
     /// the epoch. Nothing may be pasted after it.
     func paste(
-        pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int, expiresAtMs: Double?
+        pasteId: Int, text: String, targetId: Int, restoreDelayMs: Int, expiresAtMs: Double
     ) -> [String: Any]
     func checkPermissions() -> [String: Any]
     func promptAccessibility() -> [String: Any]
@@ -85,24 +85,19 @@ public struct Dispatcher {
             guard text.count <= Self.maxPasteCharacters else {
                 return .failure(RequestError(message: "paste: text is too long"))
             }
-            let targetId: Int?
-            if request["targetId"] == nil || request["targetId"] is NSNull {
-                targetId = nil
-            } else if let value = JSONLines.integer(request["targetId"]) {
-                targetId = value
-            } else {
+            // The app sends every field. One that is missing is refused, not given a
+            // default: with no destination there would be nothing to compare focus with,
+            // and with no expiry a paste could land long after the app gave up on it.
+            guard let targetId = JSONLines.integer(request["targetId"]) else {
                 return .failure(RequestError(message: "paste: targetId must be an integer"))
             }
-            let delay = JSONLines.integer(request["restoreDelayMs"]) ?? 500
+            guard let delay = JSONLines.integer(request["restoreDelayMs"]) else {
+                return .failure(RequestError(message: "paste: restoreDelayMs must be an integer"))
+            }
             guard (0 ... 60_000).contains(delay) else {
                 return .failure(RequestError(message: "paste: restoreDelayMs is out of range"))
             }
-            let expiresAtMs: Double?
-            if request["expiresAt"] == nil || request["expiresAt"] is NSNull {
-                expiresAtMs = nil
-            } else if let value = JSONLines.number(request["expiresAt"]) {
-                expiresAtMs = value
-            } else {
+            guard let expiresAtMs = JSONLines.number(request["expiresAt"]) else {
                 return .failure(RequestError(message: "paste: expiresAt must be a number"))
             }
             return .success(actions.paste(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SAMPLE_RATE } from '@shared/audio-format'
+import { MAX_AUDIO_SAMPLES, SAMPLE_RATE } from '@shared/audio-format'
 import type { SampleRange } from '../../src/main/stt/chunk-planner'
 import {
   Transcriber,
@@ -207,6 +207,24 @@ describe('Transcriber', () => {
     expect(t.engine.decoded.length).toBeGreaterThanOrEqual(3)
     for (const length of t.engine.decoded) expect(length).toBeLessThanOrEqual(seconds(30))
     expect(t.engine.decoded.reduce((sum, length) => sum + length, 0)).toBe(seconds(70))
+  })
+
+  it('ends a recording that passes the sample limit once, and drops the rest of it', async () => {
+    const t = setup([])
+    t.transcriber.begin(1)
+    t.transcriber.acceptFrame(1, 0, new Float32Array(MAX_AUDIO_SAMPLES + 1))
+    t.transcriber.acceptFrame(1, 1, new Float32Array(FRAME))
+    await t.transcriber.end(1, 2)
+
+    expect(t.events).toEqual([
+      { t: 'failed', session: 1, message: 'Recording sample limit reached' },
+    ])
+
+    // Sent again from its first frame (Retry), it is a new attempt.
+    t.transcriber.acceptFrame(1, 0, new Float32Array(FRAME))
+    await t.transcriber.end(1, 1)
+
+    expect(t.events.map((event) => event.t)).toEqual(['failed', 'final'])
   })
 
   it('counts frames that never arrived', async () => {

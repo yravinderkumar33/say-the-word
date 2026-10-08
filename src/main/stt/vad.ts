@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { basename } from 'node:path'
 import sherpa from 'sherpa-onnx-node'
 import { SAMPLE_RATE } from '@shared/audio-format'
 import type { SampleRange } from './chunk-planner'
@@ -14,6 +16,11 @@ export class VoiceDetector {
   private remainder = new Float32Array(0)
 
   constructor(modelPath: string) {
+    // sherpa-onnx opens a missing model without complaint, and the detector then finds
+    // no speech in anything: every dictation would come back as "no speech".
+    if (!existsSync(modelPath)) {
+      throw new Error(`Speech model file missing: ${basename(modelPath)}`)
+    }
     this.vad = new sherpa.Vad(
       {
         sileroVad: {
@@ -49,11 +56,6 @@ export class VoiceDetector {
     }
     this.remainder = audio.slice(offset)
     return this.drain()
-  }
-
-  /** True while the speaker is mid-sentence. */
-  get speaking(): boolean {
-    return this.vad.isDetected()
   }
 
   /** No more audio: closes the stretch of speech in progress, if any, and returns it. */

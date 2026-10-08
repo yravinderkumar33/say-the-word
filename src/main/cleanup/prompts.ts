@@ -10,7 +10,7 @@ export interface ChatMessage {
  * The instructions for Cleaned mode. Short on purpose: the model re-reads them on
  * every request, and they must leave it nothing to do but tidy.
  */
-export const SYSTEM_PROMPT = `You are a dictation post-processor. The user message contains a speech-to-text transcript inside <transcript> tags. Output the same text, cleaned, and nothing else.
+const SYSTEM_PROMPT = `You are a dictation post-processor. The user message contains a speech-to-text transcript inside <transcript> tags. Output the same text, cleaned, and nothing else.
 - Fix punctuation, capitalization and obviously mis-transcribed words. Keep the speaker's words, order and meaning.
 - If the speaker corrects themselves ("Thursday, no, Friday"), keep only the corrected version.
 - Apply spoken commands: "new line", "new paragraph", "scratch that".

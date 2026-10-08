@@ -4,6 +4,27 @@ Measurements that the plan's go/no-go gates depend on. Each entry says what was 
 
 **Machine:** MacBook Air, Apple M4 (4 performance + 6 efficiency cores), 16 GB, macOS 26.6.
 
+## The storage process, with a large saved history — 2026-10-05, evening
+
+Measured after the QA report's fixes, with the history and the figures in SQLite in a process of their own. `npm run bench:storage` drives the storage worker as built, in Electron's Node 24.21 with SQLite 3.53.4, over the same `birpc` channel the app uses, with synthetic dictations of about 200 words each in a temporary folder. Times in milliseconds; listing is the newest 50; search is two words, found by a scan of every row (there is no full-text index).
+
+| Saved dictations | Start | Newest 50: median / p95 / slowest | Search: median / p95 | A write: median / p95 / slowest | Database | The storage process | What main is given per answer |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 10,000 | 52 | 0.27 / 0.44 / 0.61 | 22.7 / 23.9 | 0.52 / 0.79 / 2.54 | 47 MB | 83 MB | 6.6 KB |
+| 100,000 | 133 | 1.44 / 1.95 / 2.83 | 186 / 201 | 1.93 / 3.25 / 4.05 | 471 MB | 83 MB | 6.7 KB |
+
+**Against the plan's targets:** listing p95 under 100 ms, and a write taken p95 under 50 ms: both met by a wide margin at 100,000. Search is reported apart, as planned: 0.2 s over 100,000 long dictations is acceptable for a page that waits 150 ms after typing, and a full-text index would cost size and make deletion harder. What main holds does not grow with the history: 6.6 KB at 10,000 and at 100,000. The database is large because the synthetic dictations are long and each is stored three times over (heard, written, and the lower-cased text searched); real dictations are shorter.
+
+**Dictation while the history works.** `node scripts/test-app.mjs --latency 20 --history-load 100000`: twenty dictations of 8.8 s on the built output, with 100,000 dictations kept on disk, the History page searching and the history being swept every 1.25 s throughout. Release to text and release to paste: **median 402 ms, 95th percentile 448 ms**, slowest 462; decode median 246 ms; microphone live median 38 ms. The gate is 1.0 s at the 95th percentile; without the history's load it was median 384, p95 420 (2026-10-03).
+
+**The signed package.** `npm run pack`: every check passes; the packaged smoke loads the model in 1,427 ms and transcribes the 2.9 s fixture in 186 ms with 0% word error rate. The smoke now also starts the storage process and has it keep a dictation, so that every package shows SQLite working inside the signed app.
+
+## QA regression observations — 2026-10-05
+
+Measured on macOS 26.6.2 during the [end-to-end QA audit](../QA_REPORT_5_10_2026.md). The existing signed package matches all 11 assets of the fresh build and passes its 82 quiet-app scenarios. Its smoke run loads the speech model in **1,153 ms** and transcribes the **2.9-second** synthetic fixture in **143 ms**, with **0% fixture word error rate**. These are single observations, not a new percentile gate.
+
+`node scripts/test-app.mjs --live-ollama 5` passed with the installed **qwen3.5:4b** model: accepted cleanup in **5/5** cases. Release-to-paste: **n=5, median 944 ms, p95/max 1,970 ms, min 861 ms**. Cleanup: **median 622 ms, p95/max 1,521 ms, min 575 ms**. Inputs were synthetic, pastes intercepted, and the data folder isolated. A sample of five does not replace the 20-run latency gate or real-voice qualification. Logs: `docs/qa-2026-10-05/package-check.log` and `ollama-live.log`.
+
 ## Residual QA fix verification — 2026-10-04
 
 The fresh signed development package in `dist/.qa-security-fixes` loads the speech model in 1,061 ms and decodes the 2.9-second synthetic smoke fixture in 192 ms with 0% word error rate. These are individual regression observations, not a new percentile or voice-quality gate. Full checks pass 626 TypeScript and 115 Swift tests; the native/pipeline closure probes pass. Built and packaged quiet-app suites each pass 52/52, with 41 intercepted pastes and zero open microphone streams. The one-minute recording uses three chunks and reports release-to-text of 979 ms (built) and 971 ms (packaged), one observation each. Real keyboard/paste timing was not measured because this execution host's helper reports no Accessibility trust.

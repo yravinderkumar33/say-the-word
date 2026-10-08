@@ -6,9 +6,9 @@ final class FakeActions: HelperActions {
     struct Paste: Equatable {
         let pasteId: Int
         let text: String
-        let targetId: Int?
+        let targetId: Int
         let restoreDelayMs: Int
-        var expiresAtMs: Double?
+        let expiresAtMs: Double
     }
 
     var configured: [[Binding]] = []
@@ -37,7 +37,7 @@ final class FakeActions: HelperActions {
     }
 
     func paste(
-        pasteId: Int, text: String, targetId: Int?, restoreDelayMs: Int, expiresAtMs: Double?
+        pasteId: Int, text: String, targetId: Int, restoreDelayMs: Int, expiresAtMs: Double
     ) -> [String: Any] {
         pastes.append(Paste(
             pasteId: pasteId,
@@ -165,49 +165,45 @@ struct DispatcherTests {
     // MARK: paste
 
     @Test func pastePassesItsFieldsThrough() throws {
-        let object = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":750}"#)
+        let object = try reply(
+            #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":750,"expiresAt":1791100000123}"#
+        )
 
         let result = try #require(object["result"] as? [String: Any])
         #expect(result["outcome"] as? String == "pasted")
-        #expect(actions.pastes == [FakeActions.Paste(pasteId: 9, text: "Hello.", targetId: 41, restoreDelayMs: 750)])
-    }
-
-    @Test func pasteDefaultsToAHalfSecondRestoreAndNoTarget() throws {
-        _ = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"Hello."}"#)
-
-        #expect(actions.pastes == [FakeActions.Paste(pasteId: 9, text: "Hello.", targetId: nil, restoreDelayMs: 500)])
-    }
-
-    @Test func pastePassesOnWhenTheAppStopsWaiting() throws {
-        _ = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":1791100000123}"#)
-
-        #expect(actions.pastes.first?.expiresAtMs == 1_791_100_000_123)
-    }
-
-    @Test func pasteWithoutAnExpiryHasNone() throws {
-        _ = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":null}"#)
-
-        #expect(actions.pastes.count == 1)
-        #expect(actions.pastes.first?.expiresAtMs == nil)
+        #expect(actions.pastes == [FakeActions.Paste(
+            pasteId: 9, text: "Hello.", targetId: 41, restoreDelayMs: 750, expiresAtMs: 1_791_100_000_123
+        )])
     }
 
     @Test func pasteKeepsNewlinesAndUnicodeIntact() throws {
-        _ = try reply(#"{"id":3,"type":"paste","pasteId":1,"text":"Line one\nLine two — café 你好"}"#)
+        _ = try reply(
+            #"{"id":3,"type":"paste","pasteId":1,"text":"Line one\nLine two — café 你好","targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#
+        )
 
         #expect(actions.pastes.first?.text == "Line one\nLine two — café 你好")
     }
 
     @Test(arguments: [
-        #"{"id":3,"type":"paste","text":"Hello."}"#,
-        #"{"id":3,"type":"paste","pasteId":"9","text":"Hello."}"#,
-        #"{"id":3,"type":"paste","pasteId":9}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":""}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":42}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":"41"}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","restoreDelayMs":-1}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","restoreDelayMs":999999}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":"soon"}"#,
-        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","expiresAt":true}"#,
+        #"{"id":3,"type":"paste","text":"Hello.","targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":"9","text":"Hello.","targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"","targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":42,"targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":"41","restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":-1,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":999999,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":500,"expiresAt":"soon"}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":500,"expiresAt":true}"#,
+        // A field the app always sends is required. Without a destination there would be
+        // nothing to compare focus with, and without an expiry a paste that was held up
+        // could land long after the app had given up on it (audit F05).
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":null,"restoreDelayMs":500,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":null,"expiresAt":1791100000123}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":500}"#,
+        #"{"id":3,"type":"paste","pasteId":9,"text":"Hello.","targetId":41,"restoreDelayMs":500,"expiresAt":null}"#,
     ])
     func pasteRejectsMalformedRequestsWithoutPasting(line: String) throws {
         let object = try reply(line)
@@ -219,7 +215,9 @@ struct DispatcherTests {
     @Test func pasteRejectsTextBeyondTheLimit() throws {
         let tooLong = String(repeating: "a", count: Dispatcher.maxPasteCharacters + 1)
 
-        let object = try reply(#"{"id":3,"type":"paste","pasteId":9,"text":"\#(tooLong)"}"#)
+        let object = try reply(
+            #"{"id":3,"type":"paste","pasteId":9,"text":"\#(tooLong)","targetId":41,"restoreDelayMs":500,"expiresAt":1791100000123}"#
+        )
 
         #expect(object["ok"] as? Bool == false)
         #expect(actions.pastes.isEmpty)

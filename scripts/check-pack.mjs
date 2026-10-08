@@ -5,7 +5,8 @@
 //   node scripts/check-pack.mjs            checks dist/mac-arm64
 //   node scripts/check-pack.mjs <folder>   checks the bundle in that folder
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readdirSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -80,7 +81,26 @@ if (natives.length === 0) {
   else failures.push(`speech library files not signed: ${unsigned.join(', ')}`)
 }
 
-// 6. The packaged app passes its own smoke check. With the speech model on disk this
+// 6. The bundle carries the app's own icon, and starts as a menu-bar app.
+const plist = join(appPath, 'Contents', 'Info.plist')
+const plistValue = (key) => run('plutil', ['-extract', key, 'raw', plist]).stdout.trim()
+const iconFile = plistValue('CFBundleIconFile')
+const bundledIcon = iconFile ? join(appPath, 'Contents', 'Resources', iconFile) : ''
+const ownIcon = join(root, 'build', 'icon.icns')
+const digest = (file) => createHash('sha256').update(readFileSync(file)).digest('hex')
+// The very file that `npm run icon` draws: a bundle that carries Electron's own icon has
+// an icon file too, and would pass a check that only looked for one.
+if (!existsSync(ownIcon)) {
+  failures.push('build/icon.icns is missing: run `npm run icon` to draw it')
+} else if (!bundledIcon || !existsSync(bundledIcon)) {
+  failures.push('the bundle has no icon file')
+} else if (digest(bundledIcon) !== digest(ownIcon)) {
+  failures.push(`the bundle's icon (${iconFile}) is not build/icon.icns: it carries another one`)
+} else console.log(`  ok  the app's own icon is bundled (${iconFile})`)
+if (plistValue('LSUIElement') === 'true') console.log('  ok  starts without a Dock icon')
+else failures.push('LSUIElement is not set: a Dock icon would flash up at every launch')
+
+// 7. The packaged app passes its own smoke check. With the speech model on disk this
 // loads the native speech library inside the signed app and transcribes a recording.
 const smokeAudio = join(root, 'tests', 'fixtures', 'audio', 'short.daniel.wav')
 const smoke = spawnSync(executable, ['--smoke'], {

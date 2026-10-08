@@ -1,9 +1,11 @@
-import { SAMPLE_RATE } from '@shared/audio-format'
+import { MAX_AUDIO_SAMPLES, SAMPLE_RATE } from '@shared/audio-format'
+import type { TranscriptEvent } from '@shared/stt-protocol'
 import { ChunkPlanner, splitAtQuietPoints, type SampleRange } from './chunk-planner'
 import { SampleBuffer } from './sample-buffer'
 
 /** Turns audio into text. */
 export interface SpeechEngine {
+  /** `samples` are 16 kHz mono in [-1, 1]. */
   transcribe(samples: Float32Array): Promise<{ text: string; decodeMs: number }>
 }
 
@@ -14,23 +16,8 @@ export interface SpeechDetector {
   finish(): SampleRange[]
 }
 
-export interface TranscriptResult {
-  session: number
-  text: string
-  /** True when the recording contained no speech at all; nothing was decoded. */
-  noSpeech: boolean
-  audioMs: number
-  /** Total time spent in the recognizer for this session. */
-  decodeMs: number
-  /** How many pieces of audio were decoded. */
-  chunks: number
-  /** Frames that never arrived. Anything above zero means words may be missing. */
-  lostFrames: number
-  /** The loudest sample, in decibels below full scale. Tells a quiet microphone from a silent one. */
-  peakDb: number
-  /** The average loudness of the whole recording, in decibels below full scale. */
-  levelDb: number
-}
+/** What a finished session reports: the worker's transcript event, without its tag. */
+export type TranscriptResult = Omit<TranscriptEvent, 't'>
 
 /** Anything quieter than this is reported as this: digital silence has no decibel value. */
 const SILENCE_DB = -120
@@ -57,7 +44,7 @@ export interface TranscriberOptions {
  * 30 s was measured on the development machine: a 57 s clip decodes in one piece in
  * 1.65 s with peak memory under 2.5 GB, so 30 s leaves a wide margin.
  */
-export const DEFAULT_TRANSCRIBER_OPTIONS: TranscriberOptions = {
+const DEFAULT_TRANSCRIBER_OPTIONS: TranscriberOptions = {
   maxChunkSec: 30,
   padBeforeSec: 0.2,
   padAfterSec: 0.3,
@@ -95,6 +82,11 @@ export class Transcriber {
   private readonly maxChunkSamples: number
   /** Sessions whose recording is to be handed over when it ends (evaluation mode). */
   private readonly audioWanted = new Set<number>()
+  /**
+   * The session last stopped at the sample limit. It has had its answer, so whatever
+   * else arrives for it is dropped.
+   */
+  private stoppedAtLimit: number | null = null
 
   constructor(
     private readonly engine: SpeechEngine,
@@ -143,6 +135,12 @@ export class Transcriber {
   }
 
   acceptFrame(session: number, seq: number, pcm: Float32Array): void {
+    if (session === this.stoppedAtLimit) {
+      // The rest of that recording is dropped. Sent again from its first frame (Retry,
+      // Undo), it is a new attempt.
+      if (seq > 0) return
+      this.stoppedAtLimit = null
+    }
     // Frames can arrive just before the `begin` that announces them.
     if (!this.current || session > this.current.id) this.begin(session)
     let active = this.current
@@ -157,6 +155,12 @@ export class Transcriber {
       if (!active) return
     }
 
+    if (active.buffer.length + pcm.length > MAX_AUDIO_SAMPLES) {
+      this.cancel(session)
+      this.stoppedAtLimit = session
+      this.emit({ t: 'failed', session, message: 'Recording sample limit reached' })
+      return
+    }
     if (seq > active.nextSeq) active.lost += seq - active.nextSeq
     active.nextSeq = seq + 1
     active.received += 1
@@ -173,6 +177,8 @@ export class Transcriber {
 
   /** The recording is over: `frames` is how many the sender sent. Emits `final` or `failed`. */
   async end(session: number, frames: number): Promise<void> {
+    // Answered already, with the failure at the limit.
+    if (session === this.stoppedAtLimit) return
     // A recording can end before its first frame (the key was let go while the
     // microphone was still opening), and the `begin` that announces a session is only
     // sent when the model was already loaded. Such a session is begun here, so that it

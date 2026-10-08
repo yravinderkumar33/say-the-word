@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FRAME_SAMPLES } from '@shared/audio-format'
 import type { CaptureEvent } from '@shared/ipc'
 import type { AudioMessage } from '@shared/stt-protocol'
+import { meterLevel, rawMicrophoneConstraints } from '../../src/renderer/microphone'
 import { MicCapture, openMicrophoneCount } from '../../src/renderer/overlay/capture/mic-capture'
 
 /** What loading the worklet does; a test can make it fail once. */
@@ -75,8 +76,13 @@ class FakeAudioContext {
   destination = {}
   /** `resume` and `suspend`, in the order they were asked for. */
   calls: string[] = []
+  closed = false
   constructor() {
     FakeAudioContext.latest = this
+  }
+  close(): Promise<void> {
+    this.closed = true
+    return Promise.resolve()
   }
   suspend(): Promise<void> {
     this.calls.push('suspend')
@@ -135,10 +141,14 @@ function setup(getUserMedia?: GetUserMedia) {
     onEvent: (event) => events.push(event),
   })
   captures.push(capture)
-  const newPort = (): { port: MessagePort; sent: AudioMessage[] } => {
+  const newPort = (): { port: MessagePort; sent: AudioMessage[]; line: { closed: boolean } } => {
     const sent: AudioMessage[] = []
-    const port = { postMessage: (message: AudioMessage) => sent.push(message) }
-    return { port: port as unknown as MessagePort, sent }
+    const line = { closed: false }
+    const port = {
+      postMessage: (message: AudioMessage) => sent.push(message),
+      close: () => (line.closed = true),
+    }
+    return { port: port as unknown as MessagePort, sent, line }
   }
   const worker = newPort()
   capture.attachPort(worker.port)
@@ -148,7 +158,18 @@ function setup(getUserMedia?: GetUserMedia) {
   const frame = (value: number, length = FRAME_SAMPLES): Float32Array =>
     new Float32Array(length).fill(value)
 
-  return { capture, events, levels, streams, requests, sent: worker.sent, newPort, worklet, frame }
+  return {
+    capture,
+    events,
+    levels,
+    streams,
+    requests,
+    sent: worker.sent,
+    worker,
+    newPort,
+    worklet,
+    frame,
+  }
 }
 
 /** Lets pending promise callbacks run, without moving the clock. */
@@ -201,6 +222,23 @@ describe('MicCapture', () => {
       noiseSuppression: false,
       autoGainControl: false,
     })
+  })
+
+  it('hears the microphone as the Settings meter does: same request, same scale (Sp-F11)', async () => {
+    const t = setup()
+    await t.capture.start(1, 'usb-headset')
+    t.worklet().emit('started')
+    t.worklet().emit(t.frame(0.1))
+
+    expect(t.requests).toEqual([rawMicrophoneConstraints('usb-headset')])
+    expect(rawMicrophoneConstraints(null).audio).toEqual({
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 1,
+    })
+    expect(t.levels.at(-1)).toBeCloseTo(0.6)
+    expect(meterLevel(t.frame(0.1))).toBe(t.levels.at(-1))
   })
 
   it('on stop: keeps a short tail, sends the last partial frame, then ends the session', async () => {
@@ -326,6 +364,16 @@ describe('MicCapture', () => {
       // Nothing more goes to the worker that is gone.
       expect(t.sent).toHaveLength(2)
       t.capture.cancel(5)
+    })
+
+    it('lets go of the line to the worker that was replaced (Sp-F15)', () => {
+      const t = setup()
+      const replacement = t.newPort()
+
+      t.capture.attachPort(replacement.port)
+
+      expect(t.worker.line.closed).toBe(true)
+      expect(replacement.line.closed).toBe(false)
     })
 
     it('sends a finished recording again while its text is still awaited', async () => {
@@ -558,6 +606,20 @@ describe('MicCapture', () => {
       { kind: 'live', session: 6 },
     ])
     expect(workletLoad.loads).toBe(2)
+  })
+
+  it('closes the audio context of a setup that failed (Sp-F15)', async () => {
+    const t = setup()
+    workletLoad.fail = new Error('The audio worklet could not be loaded')
+
+    await t.capture.start(5, null)
+    const failed = FakeAudioContext.latest!
+    await t.capture.start(6, null)
+
+    expect(failed.closed).toBe(true)
+    expect(FakeAudioContext.latest).not.toBe(failed)
+    expect(FakeAudioContext.latest!.closed).toBe(false)
+    t.capture.cancel(6)
   })
 
   it('when the microphone goes away: sends what was captured and says so', async () => {

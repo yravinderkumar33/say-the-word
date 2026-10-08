@@ -63,7 +63,9 @@ describe('changing a setting from the menu', () => {
 
     expect(made).toBe(false)
     expect(t.settings.get()).toEqual(before)
-    expect(t.onDisk()).toEqual(before)
+    expect(t.onDisk()).toEqual(
+      Object.fromEntries(Object.entries(before).filter(([key]) => key !== 'historyKeep')),
+    )
     // The menu ticked the item by itself when it was clicked: it is drawn again as it was.
     expect(t.shown.at(-1)).toEqual(before)
     expect(t.told).toEqual([NOT_SAVED_MESSAGE])

@@ -13,7 +13,7 @@ export function evaluationDir(): string {
   return join(homedir(), 'Library', 'Application Support', 'Whisper Flow', 'evaluation')
 }
 
-const KEPT_NAMES = 8
+const KEPT_NAMES = 64
 
 /**
  * Evaluation mode: saves each dictation so the recognizer (and later the cleanup) can
@@ -42,9 +42,14 @@ export class EvaluationRecorder {
   /** Saves what the recognizer heard for this session, beside its recording. */
   saveText(session: number, text: string): void {
     const name = this.nameOf(session)
-    mkdirSync(this.dir, { recursive: true })
-    writeFileSync(join(this.dir, `${name}.txt`), `${text}\n`)
-    writeFileSync(join(this.dir, `${name}.heard.txt`), `${text}\n`)
+    mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+    writeFileSync(join(this.dir, `${name}.txt`), `${text}\n`, { mode: 0o600 })
+    writeFileSync(join(this.dir, `${name}.heard.txt`), `${text}\n`, { mode: 0o600 })
+  }
+
+  paths(session: number): string[] {
+    const name = this.nameOf(session)
+    return ['.wav', '.txt', '.heard.txt'].map((extension) => join(this.dir, name + extension))
   }
 
   private nameOf(session: number): string {

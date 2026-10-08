@@ -30,11 +30,10 @@ export function describeTarget(target: TargetResult): string {
   if (target.targetId === -1) return '[target] nothing is frontmost'
   const yesNo = (value: boolean | undefined): string =>
     value === undefined ? 'unknown' : value ? 'yes' : 'no'
-  const secure = target.secure
-    ? (target.secureReason ?? 'yes')
-    : target.secureInputStuck
-      ? 'no (background Secure Input observed)'
-      : 'no'
+  // Said whichever way the field was judged: a refusal for Secure Input that an app left
+  // on (after the lock screen, say) is the case where it explains most.
+  const stuck = target.secureInputStuck ? ' (background Secure Input observed)' : ''
+  const secure = `${target.secure ? (target.secureReason ?? 'yes') : 'no'}${stuck}`
   // An app with no bundle id is rare enough that its name is worth having.
   const app = target.bundleId ?? `unknown (${target.appName ?? 'no name'})`
   return (

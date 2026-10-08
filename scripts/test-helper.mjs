@@ -22,20 +22,25 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { constants, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { switches } from './lib/args.mjs'
 import { mayTakeTheKeyboard } from './lib/mac-in-use.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const helperPath = join(root, 'resources', 'bin', 'flow-helper')
 const toolEnv = { ...process.env, FLOW_HELPER_TEST_TOOLS: '1' }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
-const idleOption = process.argv.indexOf('--when-idle')
-const whenIdle = idleOption === -1 ? 0 : Number(process.argv[idleOption + 1] ?? 0)
-const holdOption = process.argv.indexOf('--hold-password')
-const holdPasswordSeconds = holdOption === -1 ? 0 : Number(process.argv[holdOption + 1] ?? 0)
-const evenIfInUse = process.argv.includes('--even-if-in-use')
+const {
+  'when-idle': whenIdle = 0,
+  'hold-password': holdPasswordSeconds = 0,
+  'even-if-in-use': evenIfInUse = false,
+} = switches({
+  'when-idle': { type: 'number' },
+  'hold-password': { type: 'number' },
+  'even-if-in-use': { type: 'boolean' },
+})
 
 // The apps this test puts in front itself. Keys and pastes go to these and nowhere else.
 const TEXTEDIT = 'com.apple.TextEdit'
@@ -59,6 +64,16 @@ const BINDINGS = [
   { id: 'ptt', chords: [[FN]] },
   { id: 'pasteLast', chords: [[COMMAND, CONTROL, LETTER_V]] },
 ]
+
+/**
+ * What the app sends with every paste (HelperBridge.paste in src/main/native/helper-bridge.ts):
+ * the clipboard goes back half a second after the keys, and nothing is done to it or to
+ * the keyboard once the app has stopped waiting, four seconds on. The answer is waited
+ * for longer than that, so that a paste begun at the last moment is still heard of.
+ */
+const RESTORE_DELAY_MS = 500
+const PASTE_EXPIRY_MS = 4_000
+const PASTE_TIMEOUT_MS = 6_000
 
 const results = []
 function record(name, status, detail = '') {
@@ -128,16 +143,28 @@ class Helper {
     }
   }
 
-  request(type, fields = {}) {
+  request(type, fields = {}, timeoutMs = 4_000) {
     const id = this.nextId++
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`no reply to ${type}`)), 4_000)
+      const timer = setTimeout(() => reject(new Error(`no reply to ${type}`)), timeoutMs)
       this.pending.set(id, {
         resolve: (value) => (clearTimeout(timer), resolve(value)),
         reject: (error) => (clearTimeout(timer), reject(error)),
       })
       this.child.stdin.write(`${JSON.stringify({ ...fields, id, type })}\n`)
     })
+  }
+
+  /**
+   * A paste as the app asks for one, which the helper refuses without its restore delay
+   * and the time the app stops waiting. A check about either gives its own in `fields`.
+   */
+  paste(fields) {
+    return this.request(
+      'paste',
+      { restoreDelayMs: RESTORE_DELAY_MS, expiresAt: Date.now() + PASTE_EXPIRY_MS, ...fields },
+      PASTE_TIMEOUT_MS,
+    )
   }
 
   mark() {
@@ -264,6 +291,33 @@ const scratch = mkdtempSync(join(tmpdir(), 'flow-helper-test-'))
 let originalApp = null
 const children = []
 
+/** Closes what the test opened and goes back to the app it found, once, however it ends. */
+let cleanedUp = false
+function cleanUp() {
+  if (cleanedUp) return
+  cleanedUp = true
+  if (launchedTextEdit) spawnSync('pkill', ['-x', 'TextEdit'])
+  if (launchedTerminal) spawnSync('pkill', ['-x', 'Terminal'])
+  for (const child of children) child.kill()
+  rmSync(scratch, { recursive: true, force: true })
+  // Back to the app that was in front at the start. Not when another app has come to
+  // the front since: whoever is using it keeps it.
+  if (originalApp && !focusLost && ![TEXTEDIT, FINDER].includes(originalApp)) {
+    spawnSync('open', ['-b', originalApp])
+  }
+  helper.child.kill()
+}
+// Stopped with Ctrl-C, the test still closes what it opened: a TextEdit left open would
+// stop the next run from starting. Whoever stopped it is at the Mac, and keeps the app
+// they are in.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    focusLost = true
+    cleanUp()
+    process.exit(128 + constants.signals[signal])
+  })
+}
+
 /** Polls `captureTarget` until `accept(target)` is true, then returns that target. */
 async function waitForTarget(helper, accept, what, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs
@@ -300,6 +354,8 @@ app.whenReady().then(async () => {
     const id = String(chunk).includes('password') ? 'p' : 't'
     win.webContents.executeJavaScript('document.getElementById("' + id + '").focus()')
   })
+  // The test has ended, however it ended: the window goes with it.
+  process.stdin.on('end', () => app.quit())
   console.log('LAB_READY')
 })
 `
@@ -395,7 +451,7 @@ try {
       textEditTarget = await captureIn(helper, TEXTEDIT)
       expect(textEditTarget.secure === false, 'TextEdit was reported as a secure field')
       const cursor = helper.mark()
-      const { outcome } = await helper.request('paste', {
+      const { outcome } = await helper.paste({
         pasteId: 1,
         text,
         targetId: textEditTarget.targetId,
@@ -408,7 +464,11 @@ try {
         'pasteSettled',
       )
       const value = valueIn(TEXTEDIT)
-      expect(value?.includes(text), `document holds: ${JSON.stringify(value)}`)
+      // Counted, never shown: whatever is in the document is not this test's to print.
+      expect(
+        value?.includes(text),
+        `the line is not in the document, which holds ${value?.length ?? 0} characters`,
+      )
       return `hasElement=${textEditTarget.hasElement}`
     })
 
@@ -425,7 +485,7 @@ try {
 
       const target = await captureIn(helper, TEXTEDIT)
       const cursor = helper.mark()
-      const { outcome } = await helper.request('paste', {
+      const { outcome } = await helper.paste({
         pasteId: 4,
         text: ' second paste',
         targetId: target.targetId,
@@ -453,7 +513,7 @@ try {
       // TextEdit is in front and the destination is right: only the time has passed.
       const saved = await captureIn(helper, TEXTEDIT)
       const before = valueIn(TEXTEDIT)
-      const { outcome, detail } = await helper.request('paste', {
+      const { outcome, detail } = await helper.paste({
         pasteId: 6,
         text: 'this must never be pasted',
         targetId: saved.targetId,
@@ -470,7 +530,7 @@ try {
       const saved = await captureIn(helper, TEXTEDIT)
       const cursor = helper.mark()
       const inTime = `in time ${Date.now().toString(36)}`
-      const { outcome } = await helper.request('paste', {
+      const { outcome } = await helper.paste({
         pasteId: 7,
         text: inTime,
         targetId: saved.targetId,
@@ -522,7 +582,7 @@ try {
         await withSlowClipboard(1_500, async () => {
           const saved = await captureIn(helper, TEXTEDIT)
           const before = valueIn(TEXTEDIT)
-          const pasting = helper.request('paste', {
+          const pasting = helper.paste({
             pasteId: 8,
             text: 'this must never be pasted',
             targetId: saved.targetId,
@@ -557,7 +617,7 @@ try {
           const saved = await captureIn(helper, TEXTEDIT)
           const before = valueIn(TEXTEDIT)
           const asked = Date.now()
-          const { outcome, detail } = await helper.request('paste', {
+          const { outcome, detail } = await helper.paste({
             pasteId: 9,
             text: 'this must never be pasted',
             targetId: saved.targetId,
@@ -580,7 +640,7 @@ try {
           const cursor = helper.mark()
           const text = `after a slow clipboard ${Date.now().toString(36)}`
           texts.push(text)
-          const { outcome } = await helper.request('paste', {
+          const { outcome } = await helper.paste({
             pasteId: 12,
             text,
             targetId: saved.targetId,
@@ -604,7 +664,7 @@ try {
       const saved = await captureIn(helper, TEXTEDIT)
       spawnSync('open', ['-a', 'Finder'])
       await waitForFrontApp(helper, FINDER)
-      const { outcome } = await helper.request('paste', {
+      const { outcome } = await helper.paste({
         pasteId: 2,
         text: 'this must never be pasted',
         targetId: saved.targetId,
@@ -614,7 +674,7 @@ try {
     })
 
     await check('refuses a destination id it never issued', async () => {
-      const { outcome } = await helper.request('paste', {
+      const { outcome } = await helper.paste({
         pasteId: 3,
         text: 'this must never be pasted',
         targetId: 999_999,
@@ -648,7 +708,7 @@ try {
         'no secure field seen',
         8_000,
       )
-      const { outcome } = await helper.request('paste', {
+      const { outcome } = await helper.paste({
         pasteId: 10,
         text: 'this must never be pasted',
         targetId: target.targetId,
@@ -694,7 +754,7 @@ try {
           // Stand in for processing time between release and paste.
           await sleep(400)
           const text = `chromium paste ${round} ${Date.now().toString(36)}`
-          const { outcome } = await helper.request('paste', {
+          const { outcome } = await helper.paste({
             pasteId: 20 + round,
             text,
             targetId: target.targetId,
@@ -718,7 +778,7 @@ try {
           'no secure field seen',
           5_000,
         )
-        const { outcome } = await helper.request('paste', {
+        const { outcome } = await helper.paste({
           pasteId: 30,
           text: 'this must never be pasted',
           targetId: target.targetId,
@@ -738,7 +798,7 @@ try {
           const target = await captureIn(helper, CHROMIUM)
           expect(target.secure === true, `no longer seen as secure: ${JSON.stringify(target)}`)
           expect(target.secureReason === 'secureInput', `reason: ${target.secureReason}`)
-          const { outcome, detail } = await helper.request('paste', {
+          const { outcome, detail } = await helper.paste({
             pasteId: 31,
             text: 'this must never be pasted',
             targetId: target.targetId,
@@ -773,7 +833,7 @@ try {
         await sleep(1_200)
         const target = await captureIn(helper, TERMINAL)
         const text = `whisper-flow-terminal-test-${Date.now().toString(36)}`
-        const { outcome } = await helper.request('paste', {
+        const { outcome } = await helper.paste({
           pasteId: 40,
           text,
           targetId: target.targetId,
@@ -793,16 +853,7 @@ try {
     expect(code === 0, `exit result ${code}`)
   })
 } finally {
-  if (launchedTextEdit) spawnSync('pkill', ['-x', 'TextEdit'])
-  if (launchedTerminal) spawnSync('pkill', ['-x', 'Terminal'])
-  for (const child of children) child.kill()
-  rmSync(scratch, { recursive: true, force: true })
-  // Back to the app that was in front at the start. Not when another app has come to
-  // the front since: whoever is using it keeps it.
-  if (originalApp && !focusLost && ![TEXTEDIT, FINDER].includes(originalApp)) {
-    spawnSync('open', ['-b', originalApp])
-  }
-  helper.child.kill()
+  cleanUp()
 }
 
 const failed = results.filter((result) => result.status === 'FAIL').length

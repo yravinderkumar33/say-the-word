@@ -36,7 +36,7 @@ def pure_probe() -> str:
 func refused(_ history: SecureInputHistory) -> Bool {
     SecureFieldPolicy.isSecure(
         elementIsSecure: false, secureInputEnabled: true,
-        secureInputHolderPid: 501, secureInputLeftOn: history.leftOn,
+        secureInputHolderPid: 501,
         frontmostPid: 501, bundleId: "com.google.Chrome"
     )
 }
@@ -65,12 +65,12 @@ print("newHoldBetweenSamplesRefused=\(refused(retained))")
 
 let ordinaryTerminal = SecureFieldPolicy.isSecure(
     elementIsSecure: false, secureInputEnabled: true,
-    secureInputHolderPid: 501, secureInputLeftOn: retained.leftOn,
+    secureInputHolderPid: 501,
     frontmostPid: 501, bundleId: "com.apple.Terminal"
 )
 let secureTerminal = SecureFieldPolicy.isSecure(
     elementIsSecure: true, secureInputEnabled: true,
-    secureInputHolderPid: 501, secureInputLeftOn: retained.leftOn,
+    secureInputHolderPid: 501,
     frontmostPid: 501, bundleId: "com.apple.Terminal"
 )
 print("ordinaryTerminalRefused=\(ordinaryTerminal) secureTerminalRefused=\(secureTerminal)")

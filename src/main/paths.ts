@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { join } from 'node:path'
 
 /** A file shipped beside the app: `Contents/Resources/…` when packaged, `resources/…` in development. */
-export function resourcePath(...parts: string[]): string {
+function resourcePath(...parts: string[]): string {
   return app.isPackaged
     ? join(process.resourcesPath, ...parts)
     : join(app.getAppPath(), 'resources', ...parts)

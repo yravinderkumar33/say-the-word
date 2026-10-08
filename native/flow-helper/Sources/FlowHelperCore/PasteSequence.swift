@@ -70,11 +70,8 @@ public enum PasteSequence {
     /// Only `pasted` leaves the text on the clipboard, with one exception: if the time
     /// runs out after the text was written and there was no copy of the clipboard to
     /// put back, the text stays where it is.
-    public static func run(_ steps: PasteSteps, expiresAtMs: Double?) -> (outcome: String, detail: String?) {
-        func expired() -> Bool {
-            guard let expiresAtMs else { return false }
-            return steps.now() >= expiresAtMs
-        }
+    public static func run(_ steps: PasteSteps, expiresAtMs: Double) -> (outcome: String, detail: String?) {
+        func expired() -> Bool { steps.now() >= expiresAtMs }
 
         // The request may have waited behind something slow before it was read.
         if expired() { return ("expired", "onArrival") }

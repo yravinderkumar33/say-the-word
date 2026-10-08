@@ -59,7 +59,7 @@ enum TestTools {
                 return 64
             }
             if KeyCode.isModifier(value) {
-                let bit = genericFlag(for: value)
+                let bit = ModifierState.genericBits[value] ?? 0
                 flags = isDown ? flags | bit : flags & ~bit
                 event.type = .flagsChanged
             }
@@ -167,17 +167,6 @@ enum TestTools {
             "value": (value as? String) ?? "",
         ]) ?? "{}")
         return 0
-    }
-
-    private static func genericFlag(for keyCode: Int) -> UInt64 {
-        switch keyCode {
-        case KeyCode.function: 0x0080_0000
-        case KeyCode.leftCommand, KeyCode.rightCommand: 0x0010_0000
-        case KeyCode.leftOption, KeyCode.rightOption: 0x0008_0000
-        case KeyCode.leftControl, KeyCode.rightControl: 0x0004_0000
-        case KeyCode.leftShift, KeyCode.rightShift: 0x0002_0000
-        default: 0
-        }
     }
 }
 

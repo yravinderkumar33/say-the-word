@@ -71,8 +71,13 @@ public struct ClipboardSnapshot {
 
     /// Replaces the pasteboard's contents with the copy. False when the pasteboard did
     /// not take it; nothing else is tried, and the caller reports it as not restored.
-    public func restore(to pasteboard: NSPasteboard) -> Bool {
-        pasteboard.clearContents()
+    ///
+    /// The copy goes back for this Mac only, as the pasted text was written. Whether the
+    /// original was written that way cannot be read back (a password manager's copy for
+    /// this Mac looks like any other), and put back with the default options it would be
+    /// offered to the user's other devices through Universal Clipboard.
+    public func restore(to pasteboard: some WritablePasteboard) -> Bool {
+        pasteboard.prepareForNewContents(with: .currentHostOnly)
         // An empty clipboard is put back by leaving it empty.
         guard items.isEmpty == false else { return true }
         let objects = items.map { entry -> NSPasteboardItem in
@@ -85,3 +90,13 @@ public struct ClipboardSnapshot {
         return pasteboard.writeObjects(objects)
     }
 }
+
+/// What putting a copy back asks of a pasteboard. `NSPasteboard` is one; a test passes
+/// one that also notes how it was prepared, which a pasteboard cannot be asked afterwards.
+public protocol WritablePasteboard {
+    @discardableResult
+    func prepareForNewContents(with options: NSPasteboard.ContentsOptions) -> Int
+    func writeObjects(_ objects: [any NSPasteboardWriting]) -> Bool
+}
+
+extension NSPasteboard: WritablePasteboard {}

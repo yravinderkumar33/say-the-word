@@ -2,7 +2,7 @@ import { app, ipcMain, session, type IpcMainEvent, type IpcMainInvokeEvent } fro
 import { isOwnPageUrl } from './app-url'
 
 /** True for our own pages: the `app://` scheme, plus the dev server in development. */
-export function isOwnUrl(url: string): boolean {
+function isOwnUrl(url: string): boolean {
   return isOwnPageUrl(url, process.env['ELECTRON_RENDERER_URL'])
 }
 
@@ -41,12 +41,12 @@ export function lockDownWebContents(): void {
  */
 export function handleFromOwnPages<T>(
   channel: string,
-  handler: (event: IpcMainInvokeEvent) => T | Promise<T>,
+  handler: (event: IpcMainInvokeEvent, payload: unknown) => T | Promise<T>,
 ): void {
-  ipcMain.handle(channel, (event) => {
+  ipcMain.handle(channel, (event, payload: unknown) => {
     const url = event.senderFrame?.url
     if (!url || !isOwnUrl(url)) throw new Error(`refused ${channel} from an untrusted frame`)
-    return handler(event)
+    return handler(event, payload)
   })
 }
 

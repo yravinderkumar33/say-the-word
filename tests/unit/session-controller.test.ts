@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import type { PasteOutcome, PasteResult } from '@shared/helper-protocol'
 import {
   RecordingGoneError,
   SessionController,
   type Notice,
-  type PasteOutcome,
   type ProducedText,
   type SessionHandle,
   type TargetInfo,
@@ -33,6 +33,9 @@ const text = (value: string): ProducedText => ({ raw: `raw ${value}`, final: val
 function setup() {
   const productions: Array<{ session: SessionHandle; result: Deferred<ProducedText | null> }> = []
   const pastes: Array<{ text: string; targetId: number }> = []
+  /** The session each destination was read for, and each paste was sent for, in order. */
+  const targetsFor: Array<number | null> = []
+  const pastesFor: Array<number | null> = []
   const notices: Notice[] = []
   const armed: boolean[] = []
   const started: number[] = []
@@ -40,7 +43,8 @@ function setup() {
   const options = {
     target: (): Promise<TargetInfo> =>
       Promise.resolve({ targetId: 100 + pastes.length, secure: false }),
-    paste: (): Promise<PasteOutcome> => Promise.resolve('pasted'),
+    /** An outcome alone, or with the helper's detail. */
+    paste: (): Promise<PasteOutcome | PasteResult> => Promise.resolve('pasted'),
   }
   let clock = 0
   /** Timers the controller has set and not cleared. `elapse` runs them. */
@@ -56,10 +60,15 @@ function setup() {
       productions.push({ session, result })
       return result.promise
     },
-    captureTarget: () => options.target(),
-    paste: (request) => {
-      pastes.push(request)
-      return options.paste()
+    captureTarget: (sessionId) => {
+      targetsFor.push(sessionId)
+      return options.target()
+    },
+    paste: async ({ text, targetId, sessionId }) => {
+      pastes.push({ text, targetId })
+      pastesFor.push(sessionId)
+      const result = await options.paste()
+      return typeof result === 'string' ? { outcome: result } : result
     },
     armEscape: (value) => armed.push(value),
     writeClipboard: (value) => {
@@ -91,6 +100,8 @@ function setup() {
     controller,
     productions,
     pastes,
+    targetsFor,
+    pastesFor,
     notices,
     armed,
     started,
@@ -523,6 +534,21 @@ describe('when the paste does not happen', () => {
     })
   })
 
+  it('says Secure Input when that is why the helper itself refused the paste', async () => {
+    const t = setup()
+    // The field was not secure at release; the helper's own look before pasting found it so.
+    t.options.paste = () => Promise.resolve({ outcome: 'secureField', detail: 'secureInput' })
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('kept for copying'))
+    await settle()
+
+    expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1, because: 'secureInput' }])
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      outcome: 'secureField',
+      secureInput: true,
+    })
+  })
+
   it('reports no speech and pastes nothing', async () => {
     const t = setup()
     await t.dictate()
@@ -641,6 +667,16 @@ describe('paste-last and copy-last', () => {
     expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1, because: 'secureInput' }])
   })
 
+  it('paste-last says Secure Input when that is why the helper itself refused the paste', async () => {
+    const t = await withOneTranscript()
+    t.options.paste = () => Promise.resolve({ outcome: 'secureField', detail: 'secureInput' })
+
+    t.controller.dispatch({ type: 'pasteLast' })
+    await settle()
+
+    expect(t.notices).toEqual([{ kind: 'secureField', sessionId: 1, because: 'secureInput' }])
+  })
+
   it('paste-last during processing cancels that session and pastes the previous text', async () => {
     const t = await withOneTranscript()
     await t.dictate()
@@ -662,6 +698,126 @@ describe('paste-last and copy-last', () => {
     expect(t.clipboard).toEqual(['the previous transcript'])
     expect(t.notices).toEqual([{ kind: 'copied' }])
     expect(t.pastes).toEqual([])
+  })
+
+  it('names the session whose text those two would fetch: the last one that left any', async () => {
+    const t = setup()
+    expect(t.controller.lastTextSession).toBeNull()
+
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('the first'))
+    await settle()
+    expect(t.controller.lastTextSession).toBe(1)
+
+    // A dictation that leaves nothing does not take its place.
+    await t.dictate()
+    t.productions[1]!.result.resolve(null)
+    await settle()
+    expect(t.controller.lastTextSession).toBe(1)
+  })
+})
+
+describe('which session a destination and a paste are for', () => {
+  it('names the session for its own, and none for paste-last', async () => {
+    const t = setup()
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('the first'))
+    await settle()
+
+    t.controller.dispatch({ type: 'pasteLast' })
+    await settle()
+
+    expect(t.targetsFor).toEqual([1, null])
+    expect(t.pastesFor).toEqual([1, null])
+  })
+
+  it('does not give paste-last to a dictation begun while its destination was read', async () => {
+    const t = setup()
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('the first'))
+    await settle()
+    const target = deferred<TargetInfo>()
+    t.options.target = () => target.promise
+
+    t.controller.dispatch({ type: 'pasteLast' })
+    // The dictation key, while paste-last is still reading where the cursor is.
+    t.controller.dispatch({ type: 'pttDown', t: 50_000 })
+    target.resolve({ targetId: 7, secure: false })
+    await settle()
+
+    expect(t.controller.currentSessionId).toBe(2)
+    expect(t.pastesFor).toEqual([1, null])
+  })
+})
+
+describe('the end of a session, for the figures kept of it', () => {
+  /** Notes each time a session is over, and what its record said at that moment. */
+  function setupWithEnds() {
+    const t = setup()
+    const ends: Array<{ sessionId: number; outcome: string | null; text: boolean }> = []
+    const deps = (t.controller as unknown as { deps: Record<string, unknown> }).deps
+    deps['onSessionOver'] = (sessionId: number) => {
+      const entry = t.controller.recovery.list().find((item) => item.sessionId === sessionId)
+      ends.push({ sessionId, outcome: entry?.outcome ?? null, text: Boolean(entry?.finalText) })
+    }
+    return { ...t, ends }
+  }
+
+  it('comes after the record of a paste', async () => {
+    const t = setupWithEnds()
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('pasted'))
+    await settle()
+
+    expect(t.ends).toEqual([{ sessionId: 1, outcome: 'pasted', text: true }])
+  })
+
+  it('comes with the paste when Escape was pressed while it was on its way', async () => {
+    const t = setupWithEnds()
+    const paste = deferred<PasteOutcome>()
+    t.options.paste = () => paste.promise
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('already on its way'))
+    await settle()
+
+    t.controller.dispatch({ type: 'escape' })
+    // The gesture is over; the session is not.
+    expect(t.controller.stateName).toBe('idle')
+    expect(t.ends).toEqual([])
+    paste.resolve('pasted')
+    await settle()
+
+    expect(t.ends).toEqual([{ sessionId: 1, outcome: 'pasted', text: true }])
+  })
+
+  it('comes for an interrupted session once its text has been worked out', async () => {
+    const t = setupWithEnds()
+    t.controller.dispatch({ type: 'pttDown', t: 0 })
+    t.controller.dispatch({ type: 'abort' })
+    expect(t.controller.stateName).toBe('idle')
+    expect(t.ends).toEqual([])
+
+    t.productions[0]!.result.resolve(text('kept for recovery'))
+    await settle()
+
+    expect(t.ends).toEqual([{ sessionId: 1, outcome: 'cancelled', text: true }])
+  })
+
+  it('comes for a recording that failed and for a cancel with a message, not for a tap', async () => {
+    const t = setupWithEnds()
+    t.controller.dispatch({ type: 'pttDown', t: 0 })
+    t.controller.failRecording(1, 'No microphone was found')
+    t.controller.dispatch({ type: 'pttDown', t: 10_000 })
+    t.controller.dispatch({ type: 'escape' })
+    t.controller.dispatch({ type: 'pttDown', t: 20_000 })
+    t.controller.dispatch({ type: 'pttUp', t: 20_100 })
+    t.elapse()
+    await settle()
+
+    expect(t.ends).toEqual([
+      { sessionId: 1, outcome: 'failed', text: false },
+      { sessionId: 2, outcome: 'cancelled', text: false },
+    ])
   })
 })
 
@@ -949,6 +1105,28 @@ describe('Undo and Retry', () => {
     })
   })
 
+  it('says the text is kept when an Undo that left none of its own is interrupted', async () => {
+    const t = setupWithRedo()
+    await t.dictate()
+    t.controller.dispatch({ type: 'escape' })
+    t.productions[0]!.result.resolve(text('heard before the cancel'))
+    await settle()
+
+    t.controller.redo()
+    // The Mac sleeps during the Undo, whose own attempt then leaves nothing.
+    t.controller.dispatch({ type: 'abort' })
+    t.redone[0]!.result.resolve(null)
+    await settle()
+
+    expect(t.notices.at(-1)).toEqual({ kind: 'interrupted', sessionId: 1, hasText: true })
+    expect(t.controller.recovery.lastWithText()).toMatchObject({
+      sessionId: 1,
+      outcome: 'cancelled',
+      interrupted: true,
+      finalText: 'heard before the cancel',
+    })
+  })
+
   it('does not let text from the cancelled attempt replace what the Undo pasted', async () => {
     const t = setupWithRedo()
     await t.dictate()
@@ -1045,5 +1223,74 @@ describe('Undo and Retry', () => {
 
     expect(t.pastes).toEqual([])
     expect(t.notices.at(-1)).toEqual({ kind: 'secureField', sessionId: 1 })
+  })
+})
+
+describe('Delete Everything discard (QA-05)', () => {
+  it('rejects delayed transcription and clears Undo/Retry without salvage', async () => {
+    const t = setup()
+    await t.dictate()
+    const generation = t.controller.privacyGeneration
+    await t.controller.discardAll()
+    t.productions[0]!.result.resolve(text('synthetic'))
+    await settle()
+    expect(t.pastes.length).toBe(0)
+    expect(t.controller.recovery.list().length).toBe(0)
+    expect(t.controller.privacyGeneration).toBeGreaterThan(generation)
+    t.controller.dispatch({ type: 'pttDown', t: 2000 })
+    expect(t.controller.stateName).toBe('idle')
+    t.controller.resumeAfterDiscard()
+    await t.dictate()
+    expect(t.controller.stateName).toBe('processing')
+  })
+  it('a second deletion under way keeps dictation off after the first is over', async () => {
+    const t = setup()
+    await t.controller.discardAll()
+    await t.controller.discardAll()
+    // The first one finishes: the second is still deleting.
+    t.controller.resumeAfterDiscard()
+    expect(t.controller.privacyBlocked).toBe(true)
+    t.controller.dispatch({ type: 'pttDown', t: 2000 })
+    expect(t.controller.stateName).toBe('idle')
+    t.controller.resumeAfterDiscard()
+    expect(t.controller.privacyBlocked).toBe(false)
+    // Ended more often than begun: still not below nothing.
+    t.controller.resumeAfterDiscard()
+    await t.dictate()
+    expect(t.controller.stateName).toBe('processing')
+  })
+  it('rejects Paste Last whose destination lookup finishes after deletion', async () => {
+    const t = setup()
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('synthetic'))
+    await settle()
+    const target = deferred<TargetInfo>()
+    t.options.target = () => target.promise
+    const paste = t.controller['pasteLast']()
+    await settle()
+    await t.controller.discardAll()
+    target.resolve({ targetId: 900, secure: false })
+    await paste
+    expect(t.pastes.length).toBe(1)
+    expect(t.controller.recovery.list().length).toBe(0)
+  })
+  it('waits for an already submitted paste callback and ignores its result', async () => {
+    const t = setup()
+    const pasted = deferred<PasteOutcome>()
+    t.options.paste = () => pasted.promise
+    await t.dictate()
+    t.productions[0]!.result.resolve(text('synthetic'))
+    await settle()
+    let finished = false
+    const discard = t.controller.discardAll().then(() => {
+      finished = true
+    })
+    await settle()
+    expect(finished).toBe(false)
+    pasted.resolve('pasted')
+    await discard
+    await settle()
+    expect(t.controller.recovery.list().length).toBe(0)
+    expect(t.controller.stateName).toBe('idle')
   })
 })

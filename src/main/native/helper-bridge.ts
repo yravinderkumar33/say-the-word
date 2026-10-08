@@ -1,7 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import type { ZodType } from 'zod'
 import {
+  helperEventSchema,
   helperMessageSchema,
+  helperReadySchema,
   installTapResultSchema,
   pasteResultSchema,
   permissionsResultSchema,
@@ -47,10 +50,19 @@ const PASTE_TIMEOUT_MS = 6_000
  * last moment still arrives in time.
  */
 export const PASTE_EXPIRY_MS = 4_000
+/** How long after a paste the helper puts the old clipboard back. */
+export const RESTORE_DELAY_MS = 500
 /** How long a helper gets to leave by itself once its input has been closed. */
 const EXIT_GRACE_MS = 2_000
 /** After this long without a crash, the next restart starts from the shortest delay again. */
 const STABLE_AFTER_MS = 60_000
+/** The messages the helper sends on its own. One of these that does not parse is a mismatch. */
+const MESSAGE_TYPES = new Set<string>([
+  helperReadySchema.shape.type.value,
+  ...helperEventSchema.options.map((option) => option.shape.type.value),
+])
+/** Why a request failed when its reply is in a shape this build does not know. */
+const NOT_UNDERSTOOD = 'helper sent a reply this build does not understand'
 
 export interface HelperBridgeOptions {
   /** Extra arguments for the helper process. Tests use this to run a stand-in. */
@@ -81,6 +93,8 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
   private restartTimer: NodeJS.Timeout | null = null
   private restartAttempt = 0
   private startedAt = 0
+  /** Kinds of message already said in the log to be in a shape this build does not know. */
+  private readonly misunderstood = new Set<string>()
 
   private readonly args: string[]
   private readonly restartDelaysMs: number[]
@@ -115,7 +129,11 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
     child.stdout.setEncoding('utf8')
     child.stdout.on(
       'data',
-      createLineSplitter((line) => this.handleLine(line)),
+      createLineSplitter((line) => {
+        // Node can hand over a helper's last output after its exit: a key press from a
+        // helper that has gone must not start a session after the exit has ended one.
+        if (this.child === child) this.handleLine(line)
+      }),
     )
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (text: string) => console.error(`[flow-helper] ${text.trimEnd()}`))
@@ -228,12 +246,12 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
 
   /** Creates the key event tap. Fails quietly (tapInstalled false) without Accessibility. */
   async installTap(): Promise<InstallTapResult> {
-    return installTapResultSchema.parse(await this.request('installTap'))
+    return this.parseReply('installTap', installTapResultSchema, await this.request('installTap'))
   }
 
   /** Records where a paste may go: the focused app, window and element right now. */
   async captureTarget(): Promise<TargetResult> {
-    return targetResultSchema.parse(await this.request('captureTarget'))
+    return this.parseReply('captureTarget', targetResultSchema, await this.request('captureTarget'))
   }
 
   /**
@@ -244,14 +262,27 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
     const pasteId = this.nextPasteId++
     const result = await this.request(
       'paste',
-      { ...request, pasteId, restoreDelayMs: 500, expiresAt: Date.now() + PASTE_EXPIRY_MS },
+      {
+        // A lone half of a surrogate pair makes the helper's JSON reader drop the whole
+        // line, and the paste would wait out its time for nothing. It becomes U+FFFD,
+        // which is what `String.prototype.toWellFormed` does.
+        text: request.text.replace(/\p{Surrogate}/gu, '\uFFFD'),
+        targetId: request.targetId,
+        pasteId,
+        restoreDelayMs: RESTORE_DELAY_MS,
+        expiresAt: Date.now() + PASTE_EXPIRY_MS,
+      },
       PASTE_TIMEOUT_MS,
     )
-    return pasteResultSchema.parse(result)
+    return this.parseReply('paste', pasteResultSchema, result)
   }
 
   async checkPermissions(): Promise<PermissionsResult> {
-    return permissionsResultSchema.parse(await this.request('checkPermissions'))
+    return this.parseReply(
+      'checkPermissions',
+      permissionsResultSchema,
+      await this.request('checkPermissions'),
+    )
   }
 
   /** Shows the macOS prompt that leads the user to grant Accessibility. */
@@ -289,7 +320,10 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
       return // Not JSON: stray output, ignored by design.
     }
     const parsed = helperMessageSchema.safeParse(json)
-    if (!parsed.success) return
+    if (!parsed.success) {
+      this.reportMisunderstood(json)
+      return
+    }
     const message = parsed.data
 
     if (!('type' in message)) {
@@ -301,6 +335,44 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
     } else {
       this.emit('event', message)
     }
+  }
+
+  /**
+   * A message of a type this build knows, in a shape it does not: a helper from another
+   * build. It is dropped, and said. A type this build does not know is dropped unsaid: a
+   * newer helper may send it.
+   */
+  private reportMisunderstood(json: unknown): void {
+    const type =
+      typeof json === 'object' && json !== null ? (json as { type?: unknown }).type : null
+    if (typeof type !== 'string' || !MESSAGE_TYPES.has(type)) return
+    const schema: ZodType = type === 'ready' ? helperReadySchema : helperEventSchema
+    this.sayMisunderstood(`a "${type}" message`, schema.safeParse(json).error?.issues ?? [])
+  }
+
+  /**
+   * A reply as this build expects it. One in another shape fails in plain words: the
+   * validator's own report, a page of JSON, would otherwise reach the pill and the history.
+   */
+  private parseReply<T>(type: string, schema: ZodType<T>, result: unknown): T {
+    const parsed = schema.safeParse(result)
+    if (parsed.success) return parsed.data
+    this.sayMisunderstood(`the reply to "${type}"`, parsed.error.issues)
+    throw new Error(NOT_UNDERSTOOD)
+  }
+
+  /**
+   * Says in the log what this build did not understand, once for each kind of message
+   * (a helper from another build sends the same ones again and again): the fields that
+   * did not fit, and nothing of what they held.
+   */
+  private sayMisunderstood(what: string, issues: ReadonlyArray<{ path: PropertyKey[] }>): void {
+    if (this.misunderstood.has(what)) return
+    this.misunderstood.add(what)
+    const fields = new Set(issues.map((issue) => issue.path.map(String).join('.') || 'all of it'))
+    console.error(
+      `[flow-helper] ${what} does not have the shape this build knows: ${[...fields].join(', ')}`,
+    )
   }
 
   private sendBindings(): void {
@@ -315,8 +387,12 @@ export class HelperBridge extends EventEmitter<HelperBridgeEvents> {
     if (!request) return
     this.pending.delete(reply.id)
     clearTimeout(request.timer)
-    if (reply.ok) request.resolve(reply.result)
-    else request.reject(new Error(reply.error ?? 'helper reported an error'))
+    if (reply.ok) {
+      request.resolve(reply.result)
+      return
+    }
+    // Said as the helper's, so that the pill puts it into plain words.
+    request.reject(new Error(reply.error ? `helper: ${reply.error}` : 'helper reported an error'))
   }
 
   private handleExit(child: ChildProcessWithoutNullStreams, code: number | null): void {

@@ -8,7 +8,9 @@ const speech = (overrides: Partial<Speech> = {}): Speech => ({
   state: 'ready',
   modelDownloaded: true,
   modelLabel: 'Parakeet v3',
+  modelLicence: 'Parakeet: CC-BY-4.0 (NVIDIA). Silero VAD: MIT.',
   modelBytes: 671_000_000,
+  modelLanguages: 25,
   engine: 'sherpa-parakeet',
   downloadProgress: null,
   downloadError: null,
@@ -19,7 +21,7 @@ describe('the speech model step of the setup window', () => {
   it('is done, with nothing to press, when the model is on disk and loaded', () => {
     expect(modelStep(speech())).toEqual({
       done: true,
-      state: 'Downloaded and loaded',
+      checking: false,
       action: null,
       wouldNotStart: false,
     })
@@ -32,20 +34,20 @@ describe('the speech model step of the setup window', () => {
   it('offers the download when the model is not there', () => {
     expect(modelStep(speech({ modelDownloaded: false, state: 'modelMissing' }))).toEqual({
       done: false,
-      state: 'Not downloaded',
+      checking: false,
       action: 'download',
       wouldNotStart: false,
     })
   })
 
-  it('offers to cancel a download that is under way, and shows how far it is', () => {
+  it('offers to cancel a download that is under way', () => {
     const view = modelStep(
       speech({ modelDownloaded: false, state: 'modelMissing', downloadProgress: 0.426 }),
     )
 
     expect(view).toEqual({
       done: false,
-      state: 'Downloading, 42%',
+      checking: false,
       action: 'cancel',
       wouldNotStart: false,
     })
@@ -66,7 +68,7 @@ describe('the speech model step of the setup window', () => {
   it('offers to check the files of a model that is on disk and would not start', () => {
     expect(modelStep(speech({ state: 'failed' }))).toEqual({
       done: false,
-      state: 'Could not start',
+      checking: false,
       action: 'checkFiles',
       wouldNotStart: true,
     })
@@ -76,28 +78,25 @@ describe('the speech model step of the setup window', () => {
     // What the app reports after reading the files: no longer vouched for.
     const view = modelStep(speech({ modelDownloaded: false, state: 'modelMissing' }))
 
-    expect(view).toMatchObject({ done: false, state: 'Not downloaded', action: 'download' })
+    expect(view).toMatchObject({ done: false, action: 'download' })
   })
 
   it('shows the repair as a download, with a way to stop it', () => {
     const view = modelStep(speech({ state: 'failed', downloadProgress: 0.97 }))
 
-    expect(view).toMatchObject({
-      state: 'Downloading, 97%',
-      action: 'cancel',
-      wouldNotStart: false,
-    })
+    expect(view).toMatchObject({ action: 'cancel', wouldNotStart: false })
   })
 
-  it('has nothing to press while files on disk are being read', () => {
+  it('has nothing to press while files on disk are being read, and says that they are', () => {
     expect(modelStep(speech({ modelDownloaded: false, state: 'loading' }))).toEqual({
       done: false,
-      state: 'Checking the files…',
+      checking: true,
       action: null,
       wouldNotStart: false,
     })
+    // Vouched for, and being taken in: loading, not checking.
     expect(modelStep(speech({ state: 'loading' }))).toMatchObject({
-      state: 'Loading…',
+      checking: false,
       action: null,
     })
   })

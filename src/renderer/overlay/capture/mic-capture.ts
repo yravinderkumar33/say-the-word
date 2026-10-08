@@ -1,6 +1,7 @@
-import { PCM_PROCESSOR_NAME, SAMPLE_RATE } from '@shared/audio-format'
+import { MAX_AUDIO_SAMPLES, PCM_PROCESSOR_NAME, SAMPLE_RATE } from '@shared/audio-format'
 import type { CaptureEvent, Microphone } from '@shared/ipc'
 import type { AudioMessage } from '@shared/stt-protocol'
+import { meterLevel, rawMicrophoneConstraints } from '../../microphone'
 import { loadPcmWorklet } from './load-worklet'
 
 /** Audio kept after the key is released, because people let go a little early. */
@@ -11,6 +12,7 @@ const FLUSH_TIMEOUT_MS = 120
 interface ActiveCapture {
   session: number
   /** Every frame of the session, kept so it can be sent again after a worker restart. */
+  samples: number
   frames: Float32Array[]
   stream: MediaStream | null
   source: MediaStreamAudioSourceNode | null
@@ -74,6 +76,8 @@ export class MicCapture {
    * is sent again from its first frame.
    */
   attachPort(port: MessagePort): void {
+    // The line to a worker that is gone leads nowhere.
+    if (this.port !== port) this.port?.close()
     this.port = port
     const active = this.active
     if (active && !active.cancelled) {
@@ -103,12 +107,18 @@ export class MicCapture {
     this.post({ t: 'end', session: finished.session, frames: finished.frames.length })
   }
 
+  /** The microphone open for the session in hand, as the system names it; null when none is. */
+  get microphoneLabel(): string | null {
+    return this.active?.stream?.getAudioTracks()[0]?.label || null
+  }
+
   async start(session: number, deviceId: string | null): Promise<void> {
     this.cancelActive()
     this.finished = null
     const capture: ActiveCapture = {
       session,
       frames: [],
+      samples: 0,
       stream: null,
       source: null,
       node: null,
@@ -237,10 +247,12 @@ export class MicCapture {
     try {
       await this.workletReady
     } catch (error) {
-      // A load that failed is not kept: the next session tries again from scratch.
+      // A load that failed is not kept: the next session tries again from scratch, and
+      // this context, which holds on to the audio device, is closed.
       if (this.context === context) {
         this.context = null
         this.workletReady = null
+        void context.close()
       }
       throw error
     }
@@ -266,10 +278,18 @@ export class MicCapture {
   private onFrame(capture: ActiveCapture, pcm: Float32Array): void {
     if (capture.cancelled || this.active !== capture) return
     this.markLive(capture)
+    if (capture.samples + pcm.length > MAX_AUDIO_SAMPLES) {
+      if (!capture.stopping) {
+        capture.stopping = true
+        void this.finish(capture, false)
+      }
+      return
+    }
+    capture.samples += pcm.length
     const seq = capture.frames.length
     capture.frames.push(pcm)
     this.post({ t: 'pcm', session: capture.session, seq, pcm })
-    this.callbacks.onLevel(loudness(pcm))
+    this.callbacks.onLevel(meterLevel(pcm))
   }
 
   /** The microphone went away on its own (unplugged, or taken by the system). */
@@ -346,19 +366,6 @@ export class MicCapture {
   }
 }
 
-function audioConstraints(deviceId: string | null): MediaStreamConstraints {
-  return {
-    audio: {
-      ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
-      // Processing meant for calls smears speech; the recognizer wants the raw signal.
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-      channelCount: 1,
-    },
-  }
-}
-
 async function openMicrophone(deviceId: string | null): Promise<MediaStream> {
   const stream = await requestMicrophone(deviceId)
   openStreams.add(stream)
@@ -366,14 +373,14 @@ async function openMicrophone(deviceId: string | null): Promise<MediaStream> {
 }
 
 async function requestMicrophone(deviceId: string | null): Promise<MediaStream> {
-  if (!deviceId) return navigator.mediaDevices.getUserMedia(audioConstraints(null))
+  if (!deviceId) return navigator.mediaDevices.getUserMedia(rawMicrophoneConstraints(null))
   try {
-    return await navigator.mediaDevices.getUserMedia(audioConstraints(deviceId))
+    return await navigator.mediaDevices.getUserMedia(rawMicrophoneConstraints(deviceId))
   } catch (error) {
     // The chosen microphone is gone (unplugged, out of range): dictation carries on
     // with the system default instead of failing.
     if (!isMissingDevice(error)) throw error
-    return navigator.mediaDevices.getUserMedia(audioConstraints(null))
+    return navigator.mediaDevices.getUserMedia(rawMicrophoneConstraints(null))
   }
 }
 
@@ -389,13 +396,6 @@ function stopTracks(stream: MediaStream): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-/** Root mean square, scaled so that ordinary speech fills most of the range. */
-function loudness(pcm: Float32Array): number {
-  let sum = 0
-  for (const sample of pcm) sum += sample * sample
-  return Math.min(1, Math.sqrt(sum / Math.max(1, pcm.length)) * 6)
 }
 
 function describeMicError(error: unknown): string {

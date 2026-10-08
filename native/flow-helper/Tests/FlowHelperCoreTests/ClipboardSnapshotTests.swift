@@ -35,6 +35,26 @@ private final class TestClock {
     var date = Date(timeIntervalSince1970: 1_000_000)
 }
 
+/// Passes everything on to a pasteboard, and notes how it was prepared for new contents:
+/// the pasteboard cannot be asked that afterwards.
+private final class PreparationRecorder: WritablePasteboard {
+    private let pasteboard: NSPasteboard
+    private(set) var preparedWith: [NSPasteboard.ContentsOptions] = []
+
+    init(_ pasteboard: NSPasteboard) {
+        self.pasteboard = pasteboard
+    }
+
+    func prepareForNewContents(with options: NSPasteboard.ContentsOptions) -> Int {
+        preparedWith.append(options)
+        return pasteboard.prepareForNewContents(with: options)
+    }
+
+    func writeObjects(_ objects: [any NSPasteboardWriting]) -> Bool {
+        pasteboard.writeObjects(objects)
+    }
+}
+
 /// A pasteboard of the tests' own, under a name nothing else uses.
 private enum PrivatePasteboard {
     static func make() -> NSPasteboard {
@@ -245,6 +265,28 @@ struct ClipboardSnapshotTests {
             #expect(items[0].string(forType: .string) == "plain")
             #expect(items[0].data(forType: Self.richType) == Data([1, 2, 3]))
             #expect(items[1].string(forType: .string) == "another")
+        }
+    }
+
+    @Test func whatIsPutBackStaysOnThisMac() throws {
+        try withPasteboard { pasteboard in
+            // A password manager copies for this Mac only. The copy cannot tell: what it
+            // reads back looks like any other clipboard.
+            pasteboard.prepareForNewContents(with: .currentHostOnly)
+            pasteboard.setString("copied for this Mac only", forType: .string)
+            let snapshot = try #require(ClipboardSnapshot.capture(pasteboard))
+            pasteboard.prepareForNewContents(with: .currentHostOnly)
+            pasteboard.setString("the pasted text", forType: .string)
+            let recorder = PreparationRecorder(pasteboard)
+
+            let restored = snapshot.restore(to: recorder)
+
+            #expect(restored == true)
+            #expect(
+                recorder.preparedWith == [.currentHostOnly],
+                "Put back with the default options, it would be offered to the user's other devices."
+            )
+            #expect(pasteboard.string(forType: .string) == "copied for this Mac only")
         }
     }
 }

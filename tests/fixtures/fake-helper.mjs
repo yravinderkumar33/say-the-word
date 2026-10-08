@@ -4,6 +4,12 @@ import { createInterface } from 'node:readline'
 
 const protocol = Number(process.env.FAKE_HELPER_PROTOCOL ?? 3)
 const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`)
+/** What a paste must carry besides its text. The helper refuses a paste without one. */
+const PASTE_FIELDS = {
+  targetId: Number.isInteger,
+  restoreDelayMs: Number.isInteger,
+  expiresAt: (value) => typeof value === 'number',
+}
 
 // Stray output that is not part of the protocol must be ignored by the bridge.
 process.stdout.write('not json at all\n')
@@ -33,6 +39,11 @@ lines.on('line', (line) => {
         result: { targetId: 7, secure: false, hasElement: true, bundleId: 'com.example.app' },
       })
     case 'paste':
+      for (const [field, valid] of Object.entries(PASTE_FIELDS)) {
+        if (!valid(request[field])) {
+          return send({ id: request.id, ok: false, error: `paste: ${field} is missing` })
+        }
+      }
       if (request.text === 'too late') {
         // Says how long the app allowed, so a test can see the expiry that was sent.
         const allowedMs = Math.round(request.expiresAt - Date.now())
@@ -61,12 +72,7 @@ lines.on('line', (line) => {
       return send({
         id: request.id,
         ok: true,
-        result: {
-          accessibilityTrusted: true,
-          postEventAccess: true,
-          tapInstalled: true,
-          secureInput: false,
-        },
+        result: { accessibilityTrusted: true, tapInstalled: true },
       })
     case 'emit':
       send({ id: request.id, ok: true, result: {} })

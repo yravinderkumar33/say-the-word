@@ -19,24 +19,37 @@
 //   npm run test:e2e -- --when-idle 120     start once nobody has touched the Mac for 120 s
 //   npm run test:e2e -- --even-if-in-use    run although a call or a video is on
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
+import { constants, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { switches } from './lib/args.mjs'
+import { take } from './lib/build-output.mjs'
 import { mayTakeTheKeyboard } from './lib/mac-in-use.mjs'
+import { wavFileDurationMs } from './lib/wav.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const helperPath = join(root, 'resources', 'bin', 'flow-helper')
 const electronPath = createRequire(import.meta.url)('electron')
-const packaged = process.argv.includes('--packaged')
-const option = (name) => {
-  const index = process.argv.indexOf(name)
-  return index === -1 ? null : (process.argv[index + 1] ?? '')
+const {
+  packaged = false,
+  only,
+  'when-idle': whenIdle = 0,
+  'even-if-in-use': evenIfInUse = false,
+} = switches({
+  packaged: { type: 'boolean' },
+  only: { type: 'string' },
+  'when-idle': { type: 'number' },
+  'even-if-in-use': { type: 'boolean' },
+})
+
+// The app is run from the build in out/ (or from the package): nobody builds over it meanwhile.
+const inUse = take('test:e2e')
+if (inUse) {
+  console.error(inUse)
+  process.exit(1)
 }
-const only = option('--only')
-const whenIdle = Number(option('--when-idle') ?? 0)
-const evenIfInUse = process.argv.includes('--even-if-in-use')
 // Started directly rather than with `open`, so macOS attributes the Accessibility
 // permission to the terminal running this test, which already holds it.
 const packagedBinary = join(
@@ -73,9 +86,7 @@ const SPOKEN = existsSync(recording)
 /** A word of the recording that appears once per paste, and nowhere else. */
 const MARKER = 'quarterly'
 /** Long enough to hold the key while the whole recording plays. */
-const SPEAK_MS = existsSync(recording)
-  ? Math.round(((statSync(recording).size - 44) / 32_000) * 1_000) + 400
-  : 0
+const SPEAK_MS = existsSync(recording) ? Math.round(wavFileDurationMs(recording)) + 400 : 0
 const words = (text) => text.toLowerCase().match(/[a-z0-9']+/g) ?? []
 
 class FocusLost extends Error {}
@@ -188,6 +199,24 @@ async function waitForDocument(timeoutMs = 10_000) {
     if (Date.now() > deadline) throw new Error('the TextEdit document never took focus')
     await sleep(150)
   }
+}
+
+/** Closes what the test opened and removes what it made, once, however it ends. */
+let cleanedUp = false
+function cleanUp() {
+  if (cleanedUp) return
+  cleanedUp = true
+  spawnSync('pkill', ['-x', 'TextEdit'])
+  app.kill()
+  rmSync(scratch, { recursive: true, force: true })
+}
+// Stopped with Ctrl-C, the test closes its TextEdit as well: left open, it would stop the
+// next run from starting.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    cleanUp()
+    process.exit(128 + constants.signals[signal])
+  })
 }
 
 /** How many dictations the document holds: the marker word appears once in each. */
@@ -325,9 +354,7 @@ try {
     expect(!log.toLowerCase().includes(MARKER), 'transcript text appeared in the app log')
   })
 } finally {
-  spawnSync('pkill', ['-x', 'TextEdit'])
-  app.kill()
-  rmSync(scratch, { recursive: true, force: true })
+  cleanUp()
 }
 
 // Timings of the dictations that were pasted, through the real key tap and the real paste.

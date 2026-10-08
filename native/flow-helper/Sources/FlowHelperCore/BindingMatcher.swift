@@ -148,6 +148,10 @@ public struct BindingMatcher: Sendable {
             pressed.remove(keyCode)
         }
 
+        // A key-down that is let through owns its key-up. A mark left by an earlier press
+        // whose release the tap never saw must not swallow it: the app would be left
+        // with the key held down.
+        swallowed.remove(keyCode)
         return MatcherDecision(events: interruptModifierOnlyBindings())
     }
 
@@ -165,7 +169,8 @@ public struct BindingMatcher: Sendable {
     }
 
     /// Ends every active binding and forgets key state. Used when key events may have
-    /// been missed (the tap was disabled, or the machine slept).
+    /// been missed: macOS disabled the tap, or the helper took it down. (After the Mac
+    /// sleeps, the app sends the shortcut table again, and `configure` forgets the same.)
     public mutating func reset() -> [MatcherEvent] {
         let events = active.map { MatcherEvent.bindingUp($0.id) }
         pressed = []

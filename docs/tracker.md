@@ -4,6 +4,78 @@ Task status for the plan in [03 Implementation phases](03-implementation-phases.
 
 **Legend:** `[ ]` not started · `[~]` in progress · `[x]` done and verified · `[!]` waiting on a person
 
+## Review of the whole codebase before submission — 2026-10-05, night
+
+- [x] Dead code, unused exports and dependencies (`knip`, each entry checked by hand), and a read of every area by eight reviewers: about 135 findings, each shown to hold before it was changed. The progress log has them, worst first.
+- [x] Fixed: the four worst (Cleaned mode losing a dictation that said "constructor"; the guard accepting a moved negation or swapped numbers; a release build accepting debugging switches; the keyboard tests posting keys while another dictation app listened), every medium finding, and the low ones that were safe. Every new test fails with its fix taken out.
+- [x] Verified: `npm run check` (1,171 TypeScript tests, 121 Swift tests), `npm run build`, `npm run smoke` (quiet now), `npm run test:app` 91 of 91 on the built output, `npm run pictures` (67), and a package built from this tree in a scratch folder that passed every check of `check-pack.mjs`, its smoke included. `npm audit`: 0 vulnerabilities.
+- [x] **Electron fuses** (`ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS`, `--inspect-brk` act before the app's own code, under its permissions): set in `electron-builder.yml` and read back from that scratch package (running as Node, `NODE_OPTIONS` and the inspector off; archive-only loading and the archive's integrity check on).
+- [ ] **Licence notices.** MIT, Apache-2.0 and CC-BY-4.0 ask for their notices to ship; the bundles carry none, and About shows names and licence names only. A notices file generated at build time, shipped in the app and linked from About, is the fix: before any release.
+- [ ] Recommendations left for later, each in the progress log: splitting `wire-dictation.ts` (its Cleanup and Try it part) and `FirstRun.tsx` by step; a typed request map for the storage process; one shared launcher for the test scripts; signing the helper without the app's entitlements; type-checking the `.mjs` scripts; typed lint rules for floating promises in `src/main` (one left at the time of writing); Secure Input with several login sessions (needs a second user to test); the menu-bar icon and Home sharing one status function; a structured cleanup reason in `AppStatus` instead of a sentence four places read.
+- [!] **Run the keyboard tests once on this build**, with the packaged app quit (they refuse while it runs): `npm run test:e2e -- --when-idle 120` and `npm run test:helper:integration -- --when-idle 120`. The helper's paste requests in the second were changed for the fields the helper now requires, and not run.
+- [!] **Rebuild the package and run its suite**, when the open app may be replaced: `npm run pack`, then `npm run test:app -- --packaged`.
+
+## End-to-end QA review — 2026-10-05
+
+- [x] Review the current working tree, run full checks/build, reproduce fault paths, and inspect the implemented user journeys. Findings and evidence: [QA_REPORT_5_10_2026.md](../QA_REPORT_5_10_2026.md).
+- [x] **Resolve the report's 14 confirmed issues (3 P1, 9 P2, 2 P3). Done the evening of 2026-10-05:** each was checked first, all fourteen held, and all fourteen are fixed, with history and the figures moved into SQLite in a storage process of their own (the plan the owner approved). A review of the first fixes found defects they had brought in (one failing write holding back every later one, history in memory lost without a word, a time to keep deleting what its question had not counted, Cleaned-mode latency, and smaller ones); those are fixed too. Every new test fails with its fix taken out. The closure table is at the end of the report; the evidence is in the progress log.
+- [x] The report's remaining risk 6 (hosts on a download's way not listed on the Privacy page) is fixed. Risk 5 (a crashed overlay page) was not reproduced and is not addressed.
+- [!] Complete guarded real-keyboard/paste, fresh macOS permission, physical microphone, and VoiceOver verification on an available Mac. The audit preserved the normal running instance and its session-only history.
+
+|       | Finding                                            | Status    | Test                                                              |
+| ----- | -------------------------------------------------- | --------- | ----------------------------------------------------------------- |
+| QA-01 | An unrelated setting authorised deleting history   | [x] fixed | `settings.test.ts`, `history-store.test.ts`, `test:app`           |
+| QA-02 | A failed migration deleted the only copy           | [x] fixed | `history-store.test.ts`                                           |
+| QA-03 | Practice saved audio and text                      | [x] fixed | `evaluation-sessions.test.ts`, `test:app`                         |
+| QA-04 | Stop Saving let the recording under way be written | [x] fixed | `evaluation-sessions.test.ts`, `test:app`                         |
+| QA-05 | Delete Everything left text for Paste Last         | [x] fixed | `session-controller.test.ts`, `stt-host.test.ts`, `test:app`      |
+| QA-06 | A later save hid an unsaved earlier one            | [x] fixed | `storage-host.test.ts`, `history-store.test.ts`                   |
+| QA-07 | Unreadable history uncounted and undeletable       | [x] fixed | `history-store.test.ts`, `questions.test.ts`                      |
+| QA-08 | Cleanup accepted changed numbers                   | [x] fixed | `guard.test.ts`                                                   |
+| QA-09 | One slow comparison disabled cleanup               | [x] fixed | `refiner.test.ts`                                                 |
+| QA-10 | An older model choice overwrote a later one        | [x] fixed | `hub-mutations.test.ts`, `test:app`                               |
+| QA-11 | A new microphone inherited "Heard you"             | [x] fixed | `async-controls.test.ts`                                          |
+| QA-12 | Try it kept an old model's result                  | [x] fixed | `async-controls.test.ts`, `test:app`                              |
+| QA-13 | The volume slider showed a value not saved         | [x] fixed | `async-controls.test.ts`                                          |
+| QA-14 | Processing Cancel missing from the menu            | [x] fixed | `pill-view.test.ts`, `test:app` (reads the menu the app built)    |
+
+## The interface, from the design — 2026-10-04
+
+The interface is designed in Claude Design from [the design brief](05-design-brief.md). The owner chose direction A. Round 2 (the pill, Home, the components and the tokens) was built first. **Every other screen of the design followed the same evening, except Dictionary, Apps and Snippets: the owner decided against those, the screens and what they would do.** What differs from the design, and why, is listed in the brief.
+
+Round 2:
+
+- [x] The design's tokens as CSS variables: light and dark for the windows, one look for the pill, and the Increase Contrast, Reduce Motion and Reduce Transparency variants (`src/renderer/tokens.css`)
+- [x] The pill: every state, variant and kind of message in the design. Hint after half a second of hover; "Waiting for the microphone…" after a second; green bars only while live; "No sound from …" when nothing has been heard for three seconds; the clock of a hands-free recording and its last-minute countdown; Cancel on a text only once it has taken a second; "Tidying"; the shake and "Still on the last dictation"; an icon and a weight per kind of message; confirmations that leave after two seconds; a message that waits under the pointer; the mark for text left waiting
+- [x] Everything the pill offers is in the menu-bar menu too (Undo Cancel, Retry, Stop Dictation, Cancel Dictation, Paste Last Dictation, Copy Last Dictation), and what VoiceOver says for each state is written (`spokenFor`)
+- [x] The main window: sidebar, Home (the status line with its one fix button in place of the setup checklist, mode, microphone, gestures, the last three dictations, the figures line), the amber bar while dictations are being saved, the layout for a small window
+- [x] The figures: words per day and recent timings in `usage.sqlite`. Counts only
+- [x] The "Buy me a coffee" link, menu item and its one door to the browser. Hidden until there is an address
+
+The rest of the design:
+
+- [x] **The first run**, one step per screen: Welcome, Microphone (with a live level and "Heard you"), Accessibility (with a drawing of the list in System Settings; it completes by itself), Keys (only when another dictation app is on the same key), Try it (a practice box, three exercises ticked off as each is done, and a drawing of what the pill is saying), Cleaned mode, Ready (the gestures, where the app lives, Open at login). A new installation starts with it; Settings can show it again
+- [x] **History**: every dictation with its time, app, first line and how it ended, by day; search; pause; how long it is kept (only until the app quits, 7 days, 30 days, until deleted); Delete All. Held in memory unless the owner chooses otherwise, and that choice is confirmed in a system dialog which no page can answer. On disk: one file per day in a folder only the owner can read, deleted when its time is up
+- [x] **A dictation opened**: outcome and mode in words, the reason it was not pasted or was tidied with rules only, with one fix button; what was heard beside what was written, with the differences marked; the timings; Copy, Use the Raw Text, Delete
+- [x] **Cleanup**: the two modes as cards, Ollama's state with its one action (Get Ollama, Start Ollama), the models that run on this Mac, a refused model with the reason in words, what Cleaned may and never changes, and "Try it": a sentence three ways with the time each took
+- [x] **Privacy**: where speech is recognized; what has been contacted since launch, counted by the app itself; what is stored and how much, each with Show in Finder and Delete; Delete Everything. Each deletion is confirmed in a system dialog
+- [x] **Settings**: the dictation key (`Fn`, or `Control`+`Option` for keyboards without it); microphones in an order of preference, each with a ten-second test; sounds on or off, their volume, and each cue to listen to; the pill shown at rest or only while dictating; Open at login; Show in Dock; how long the speech model stays in memory; the log and "Copy Diagnostics"; the Ollama address (this Mac only)
+- [x] **About**, from the design: version, the licences, and the links, each shown once it has somewhere to lead
+- [x] **The menu-bar icon in five shapes** (ready, live, needs attention, paused, saving), told apart without colour, and **the menu** in the design's order with Recent (the last five; choosing one copies it) and "Pause Dictation for 1 Hour"
+- [x] **Pause**: every shortcut off for an hour, or until resumed in the menu or on Home; the pill, the menu and Home each say until when
+- [x] **The app icon** (`npm run icon`), an app menu of the app's own in place of Electron's, and no Dock icon unless Settings asks for one
+- [x] **The accessibility round**: the contrast of secondary text, a focus ring on every control, the sidebar as one stop for the keyboard with the arrow keys inside it, the history list worked from the keyboard, a sentence for VoiceOver wherever a mark or a colour carries meaning, and the Increase Contrast and Reduce Transparency looks
+- [x] Tests never reach outside the app: what would open Finder, the browser, the clipboard, a login item or a system dialog is replaced by a counting stand-in when the app runs under test
+- [x] `npm run pictures`: the icon's five shapes, the pill's states, every page in light and dark, the first run step by step, and the two accessibility looks, from a quiet instance
+- [x] A second reading by a reviewer with no part in the work, with two helpers: fifteen findings and a dozen smaller ones, each checked first. All held. Two were blockers (a settings file that could not be read deleted the saved history at the next start; day files named by the local date went wrong after a change of time zone); all are fixed but two that are answered as designed (the table is in the progress log)
+- [x] Verified: `npm run check` (943 TypeScript tests, 123 Swift tests); `npm run test:app` 82 of 82 on the built output and 82 of 82 on the signed package, with 24 new scenarios since Round 2; `npm run pack`; `npm run pictures`, 67 pictures
+- [ ] **Not built, by decision:** Dictionary, Apps, Snippets
+- [ ] **Not built, and why** (each is in the brief): a recorder for the other shortcuts; the Keys step for a Globe key that is set to do something else; Check for Updates (Phase 8); the pill's right-click menu
+- [!] **The Buy Me a Coffee address.** It goes in `SUPPORT_URL` in `src/main/support.ts`; the note from the maker on About appears with it (`MAKER_NAME` in `src/shared/product.ts` is the name it is signed with)
+- [!] **The repository's address**, for About's "Source code" and "Report a problem": `SOURCE_URL` in `src/main/support.ts`
+- [!] **Look at it and listen to it.** The pictures were looked at. Nobody has yet gone through the first run on a Mac that has never run the app, used `Control`+`Option` or Pause with a real key, dragged a microphone into another place with a real pointer, opened the menu, seen where the close, minimise and zoom buttons sit over the sidebar, or listened to VoiceOver
+- [!] **A decision: how long Undo and Retry are offered to someone who does not use the pointer.** They are in the menu-bar menu for as long as the pill shows them, which is six seconds, and a menu takes longer than that to reach from the keyboard. Offering them for longer means holding the recording for longer. One middle way is to hold the message while the menu is open
+
 ## Residual QA fixes — 2026-10-04
 
 - [x] R1: background Secure Input history no longer exempts the current field. Copy/recovery handles refused automatic paste.
@@ -12,7 +84,7 @@ Task status for the plan in [03 Implementation phases](03-implementation-phases.
 - [x] Full checks pass: 626 TypeScript tests and 115 Swift tests. Native and pipeline closure probes pass. Fresh build, separate signed package and all package checks pass; all 11 packaged assets match the build.
 - [x] Built and newly signed packaged quiet-app suites each pass 52/52, including three new full-dictation regression scenarios; each records 41 intercepted pastes and zero open microphone streams. All thirteen audit findings are accepted within the audited code scope.
 - [!] Real keyboard/paste sign-off still needs an Accessibility-trusted execution host and an available Mac. The fresh package smoke reports `accessibilityTrusted=false`.
-- [!] The fixed package is staged at `dist/.qa-security-fixes/mac-arm64/Whisper Flow Dev.app`. The existing app is running from `dist/mac-arm64` and was not stopped or overwritten.
+- [x] The fixed package was first staged at `dist/.qa-security-fixes/mac-arm64/Whisper Flow Dev.app`, beside a running copy. Since the evening of 2026-10-04 the package in `dist/mac-arm64` itself is a build with these fixes (and the interface from the design); the staged copy is no longer needed.
 
 See [the sign-off report](qa-signoff-2026-10-04.md). Its earlier review withheld sign-off for R1–R3; this entry records the subsequent requested fixes. The implementation history below is preserved with its original verification limits.
 
@@ -27,7 +99,9 @@ See [the sign-off report](qa-signoff-2026-10-04.md). Its earlier review withheld
 
 The audit did not implement fixes or change the application's existing settings. The phase history below describes prior work; the audit report is the current list of newly verified defects and coverage limits.
 
-**Current focus:** the first report from real use ("the text is not getting pasted", 2026-10-03) is found and fixed; the entry of 2026-10-04 in the progress log has the cause and the evidence. Everything that can be built and verified without a person is done through Phase 4, and so is the part of Phase 5 that does not touch the helper. What decides the next step is at the bottom: the checks that need hands and a voice, and the set of your own dictations that Phases 3 and 4 are judged on.
+**Current focus (2026-10-04, night):** the interface is built from the design, except the three screens decided against (the section above). What follows is the state before that work, and still holds.
+
+**Earlier focus:** the first report from real use ("the text is not getting pasted", 2026-10-03) is found and fixed; the entry of 2026-10-04 in the progress log has the cause and the evidence. Everything that can be built and verified without a person is done through Phase 4, and so is the part of Phase 5 that does not touch the helper. What decides the next step is at the bottom: the checks that need hands and a voice, and the set of your own dictations that Phases 3 and 4 are judged on.
 
 **Earlier implementation verification (before the residual R1–R3 fixes above):** `npm run check` passes with 578 unit tests and 112 Swift tests; `npm run test:app` passes 49 of 49 scenarios, built and on the final package. Of the two tests that take the keyboard, `npm run test:helper:integration` passes 22 of 22 on the final helper, and the password input is still refused after 65 seconds. `npm run test:e2e` passed 11 of 11 on the package before the review fixes; on the final package it got through 2 of 11 and then stopped itself, as it should, because the owner came back to the Mac. Earlier that afternoon the keyboard tests had run four times over a FaceTime call; the progress log has what happened and what was changed in the tests. The live paste into six apps (TextEdit, iTerm2, VS Code, Safari, Brave, Chrome) is from the verification before the audit and was not repeated.
 
@@ -166,10 +240,13 @@ Not part of F01 to F13, and not done: the three risks the report lists as alread
   - [x] Verified: state-machine tests for every row of the table; `npm run test:app` scenarios for each way in and out, for Undo and Retry, and for how long a recording is held
   - [x] Undo for a cancelled session and Retry for a failed decode: the recording is held for as long as the offer is shown (six seconds), then dropped
   - [ ] Failed-paste detection through a pasteboard read receipt
-  - [ ] Pill hover hint and right-click menu; Secure Input notice; shortcut for keyboards without `Fn`
+  - [x] Pill hover hint (2026-10-04, with the pill from the design)
+  - [x] A dictation key for keyboards without `Fn`: `Control`+`Option`, chosen in Settings (2026-10-04). The helper takes the table as it took the first; the Swift tests cover it. Not yet pressed on a physical keyboard
+  - [x] Pause Dictation for 1 Hour (2026-10-04): the shortcuts are off, and the menu, the pill and Home say until when
+  - [ ] Pill right-click menu; Secure Input notice
   - [x] `npm run test:e2e` and `npm run test:helper:integration` rerun after hands-free (2026-10-04): 11 of 11 and 16 of 16. The end-to-end test now starts the way a first launch does, with Accessibility arriving after the app is up
   - [!] Try each gesture with the physical key: synthetic key events were not used for these
-- [ ] Phase 6: Hub and persistent history
+- [x] Phase 6: Hub and persistent history, built from the design on 2026-10-04 (see the section at the top): the first run, History, Cleanup, Privacy, Settings, About. The dictionary editor and Snippets are not built, by the owner's decision
 - [ ] Phase 7: context awareness and Command Mode
 - [ ] Phase 8: release
 
@@ -194,7 +271,7 @@ Results go in `docs/benchmarks.md`; this table shows the outcome.
 
 None of these blocks the next phase. The first three are what stands between the build and daily use.
 
-1. **Use it.** The app is running (reopened at 12:27 on 2026-10-04, on the package with the fixes for the audit's findings); to start it again, `open -n "dist/mac-arm64/Whisper Flow Dev.app"`. Hold `Fn` in a text field, speak, let go. If a dictation does not arrive, note what the pill said; the log (menu-bar icon → Show Log) has the rest, and it never contains what you said.
+1. **Use it.** The package in `dist/mac-arm64` was rebuilt late on 2026-10-04 (23:55) with every screen of the design and every fix up to then. It was not started: it was not running at the time (it had been quit at 20:58), and it would put a second key tap on `Fn` beside Wispr Flow's. Quit Wispr Flow, then `open -n "dist/mac-arm64/Whisper Flow Dev.app"`. Two things are different from the build before: it has no Dock icon unless Settings › General › Show in Dock is switched on (it lives in the menu bar; the window opens from the menu-bar icon), and the window opens on Home, not on the first run, because this Mac has settings already. Settings › Advanced › Setup guide › Show Again shows the first run. Hold `Fn` in a text field, speak, let go. If a dictation does not arrive, note what the pill said; the log (menu-bar icon → Show Log) has the rest, and it never contains what you said.
 2. **Quit Wispr Flow, then try the physical `Fn` key's other gestures:** tap it once and twice quickly (note whether the emoji picker opens or Apple Dictation starts), and try `Fn`+arrow keys. If a tap triggers any system action, say so: the fallback is ready to be switched on.
 3. **Dictate in the apps you use** (Slack, Chrome, VS Code, Terminal) and note anything that feels wrong: a clipped first word, text landing in the wrong place, a paste refused when it should not have been, "No speech heard" when you did speak.
 4. **Two hardware checks:** unplug or switch off a microphone mid-recording, and close the lid mid-recording. Nothing should be pasted in the second case, and no key should be stuck afterwards.
@@ -204,5 +281,15 @@ None of these blocks the next phase. The first three are what stands between the
 6. **Run the end-to-end keyboard test once on the final build**, when you can leave the Mac alone for a minute: quit the app, then `npm run test:e2e -- --packaged --when-idle 120`. It passed its first two checks on this package and stopped when you came back; the other nine last passed on the package before the review fixes. (The helper's own keyboard test has passed on the final build.) Both tests now refuse to start during a call or a video and stop when you bring another app forward.
 7. **Three things from the audit's fixes that need a person.** (a) Lock the screen with a browser's password field focused, unlock, and dictate into it: it must be refused ("Secure Input is on: nothing was pasted"). (b) If macOS ever leaves Secure Input on after the lock screen, automatic dictation into the app it names stays refused until the signal clears; switching away and back must not bypass protection. Copy remains available. (c) In the setup window, try Cancel during a model download and "Stop saving" while dictations are being saved: the functions behind them are tested, the buttons themselves were not clicked.
 8. **The real first launch.** The fix for a grant that arrives while the app is running was tested with an imitation of that order of events. The real thing needs someone to remove the app from System Settings → Privacy & Security → Accessibility, open it, grant again, and dictate without restarting it.
+
+9. **What the new screens need from a person** (2026-10-04):
+   - **Two addresses.** The Buy Me a Coffee page (`SUPPORT_URL` in `src/main/support.ts`) and the repository (`SOURCE_URL`, same file). Until each is there, its links are not shown anywhere. With the first comes the note on About: say what it should say, and under which name (`MAKER_NAME` in `src/shared/product.ts` is "Ravinder" for now).
+   - **The first run on a Mac, or an account, that has never run the app:** the real prompts for the microphone and Accessibility, the microphone check with a voice, the three exercises with a real key. Or, on this Mac: Settings › Advanced › Setup guide › Show Again.
+   - **`Control`+`Option` as the dictation key** (Settings › Shortcuts), and **Pause Dictation for 1 Hour** in the menu: both with real keys. Neither has been pressed by a hand.
+   - **Move the window by its top edge**, and click what is at the top of each page in a small window. The second is tested; the first cannot be without a pointer.
+   - **The menu-bar icon** in its five shapes in the real menu bar, light and dark, and the menu itself.
+   - **VoiceOver** on the pill's messages, the History list and an opened dictation's marks.
+   - **Keep the history on disk once** (History › Keep), look at the dialog, and at Privacy afterwards.
+   - **A decision that was taken for you and can be taken back:** the dictionary that `settings.json` can hold still works, although the Dictionary page is not built. Say if it should go too.
 
 Also open (optional): authenticate `context7` through `/mcp`, which gives the assistant current library documentation.

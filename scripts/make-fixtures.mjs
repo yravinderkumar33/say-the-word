@@ -5,7 +5,7 @@
 //
 //   npm run fixtures
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -45,6 +45,8 @@ const TEXTS = {
 
 /** British, American and Indian English; a voice that is not installed is skipped. */
 const VOICES = ['Daniel', 'Samantha', 'Aman']
+/** The voices the tests play: Daniel in `npm run test:app`, `test:e2e` and the smoke check, Samantha in `npm run pictures`. */
+const NEEDED = ['Daniel', 'Samantha']
 
 if (process.platform !== 'darwin') {
   console.log('fixtures: skipped (needs the macOS `say` command)')
@@ -53,14 +55,27 @@ if (process.platform !== 'darwin') {
 
 const installed = execFileSync('say', ['-v', '?'], { encoding: 'utf8' })
 const voices = VOICES.filter((voice) => new RegExp(`^${voice}\\s`, 'm').test(installed))
+const missing = NEEDED.filter((voice) => !voices.includes(voice))
+if (missing.length > 0) {
+  console.error(
+    `fixtures: install the ${missing.join(' and ')} voice${missing.length > 1 ? 's' : ''} first ` +
+      '(System Settings → Accessibility → Spoken Content → System Voice → Manage Voices…). ' +
+      'The tests play them.',
+  )
+  process.exit(1)
+}
 mkdirSync(outDir, { recursive: true })
 
 let made = 0
 for (const [id, text] of Object.entries(TEXTS)) {
-  writeFileSync(join(outDir, `${id}.txt`), `${text}\n`)
+  // A text that has changed is said again by every voice. Its `.txt` is written last, so
+  // that a run that stops half-way makes the next one start that text again.
+  const textFile = join(outDir, `${id}.txt`)
+  const changed = !existsSync(textFile) || readFileSync(textFile, 'utf8') !== `${text}\n`
   for (const voice of voices) {
     const file = join(outDir, `${id}.${voice.toLowerCase()}.wav`)
-    if (existsSync(file)) continue
+    if (existsSync(file) && !changed) continue
+    rmSync(file, { force: true })
     const result = spawnSync(
       'say',
       ['-v', voice, '-o', file, '--file-format=WAVE', '--data-format=LEI16@16000', text],
@@ -72,6 +87,7 @@ for (const [id, text] of Object.entries(TEXTS)) {
     }
     made += 1
   }
+  writeFileSync(textFile, `${text}\n`)
 }
 console.log(
   `fixtures: ${Object.keys(TEXTS).length} texts × ${voices.length} voices (${voices.join(', ')}) in ${outDir}; ${made} new`,

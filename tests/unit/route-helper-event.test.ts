@@ -128,6 +128,37 @@ describe('describeTarget', () => {
     ).toBe('[target] app=com.brave.Browser element=yes window=yes secure=secureInput')
   })
 
+  it('says when the Secure Input that refused it was seen held in the background before', () => {
+    // An app that kept Secure Input on after the lock screen, say.
+    expect(
+      describeTarget({
+        targetId: 5,
+        secure: true,
+        secureReason: 'secureInput',
+        secureInputStuck: true,
+        hasElement: true,
+        hasWindow: true,
+        bundleId: 'com.brave.Browser',
+      }),
+    ).toBe(
+      '[target] app=com.brave.Browser element=yes window=yes ' +
+        'secure=secureInput (background Secure Input observed)',
+    )
+    // A terminal, whose Secure Input does not count.
+    expect(
+      describeTarget({
+        targetId: 6,
+        secure: false,
+        secureInputStuck: true,
+        hasElement: true,
+        bundleId: 'com.apple.Terminal',
+      }),
+    ).toBe(
+      '[target] app=com.apple.Terminal element=yes window=unknown ' +
+        'secure=no (background Secure Input observed)',
+    )
+  })
+
   it('falls back to the process name for an app with no bundle id', () => {
     expect(
       describeTarget({ targetId: 6, secure: false, hasElement: true, appName: 'some-tool' }),

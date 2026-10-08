@@ -1,6 +1,6 @@
 import type { ChatMessage } from './prompts'
 
-export const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434'
+const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434'
 
 /**
  * The context size is fixed at load time: sending a different value makes Ollama load
@@ -34,7 +34,8 @@ export interface OllamaModel {
   name: string
   digest: string
   capabilities: string[]
-  parameterSize: string | null
+  /** Its size on disk in bytes, when the list says. */
+  bytes: number | null
   /** True when Ollama would run this model on another machine. */
   remote: boolean
 }
@@ -60,7 +61,6 @@ export interface ChatResult {
   remote: boolean
   /** Request sent → first piece of the reply. */
   firstTokenMs: number | null
-  totalMs: number
   outputTokens: number | null
   /** Time the model spent generating, as Ollama reports it. */
   generationMs: number | null
@@ -151,21 +151,18 @@ export class OllamaClient {
 
   /** Every model the server has, with what it can do and where it would run. */
   async models(timeoutMs = 2_000): Promise<OllamaModel[]> {
-    const body = (await this.json('/api/tags', undefined, timeoutMs)) as { models?: unknown }
-    if (!Array.isArray(body.models)) throw new OllamaError('stream', 'Unexpected model list')
-    return body.models.flatMap((entry: unknown): OllamaModel[] => {
-      if (!entry || typeof entry !== 'object') return []
-      const model = entry as Record<string, unknown>
-      if (typeof model['name'] !== 'string') return []
-      const details = (model['details'] ?? {}) as Record<string, unknown>
+    const body = await this.json('/api/tags', undefined, timeoutMs)
+    const models = isRecord(body) ? body['models'] : undefined
+    if (!Array.isArray(models)) throw new OllamaError('stream', 'Unexpected model list')
+    return models.flatMap((entry: unknown): OllamaModel[] => {
+      if (!isRecord(entry) || typeof entry['name'] !== 'string') return []
       return [
         {
-          name: model['name'],
-          digest: typeof model['digest'] === 'string' ? model['digest'] : '',
-          capabilities: stringList(model['capabilities']),
-          parameterSize:
-            typeof details['parameter_size'] === 'string' ? details['parameter_size'] : null,
-          remote: hasRemoteFields(model),
+          name: entry['name'],
+          digest: typeof entry['digest'] === 'string' ? entry['digest'] : '',
+          capabilities: stringList(entry['capabilities']),
+          bytes: numberOrNull(entry['size']),
+          remote: hasRemoteFields(entry),
         },
       ]
     })
@@ -177,8 +174,9 @@ export class OllamaClient {
     timeoutMs = 2_000,
   ): Promise<{ capabilities: string[]; remote: boolean }> {
     const body = await this.json('/api/show', { model }, timeoutMs)
+    if (!isRecord(body)) throw new OllamaError('stream', 'Unexpected model details')
     return {
-      capabilities: stringList((body as Record<string, unknown>)['capabilities']),
+      capabilities: stringList(body['capabilities']),
       remote: hasRemoteFields(body),
     }
   }
@@ -234,7 +232,6 @@ export class OllamaClient {
       doneReason: null,
       remote: false,
       firstTokenMs: null,
-      totalMs: 0,
       outputTokens: null,
       generationMs: null,
       loadMs: null,
@@ -335,7 +332,6 @@ export class OllamaClient {
       throw new OllamaError('stream', 'Ollama ended the chat reply before completion')
     }
     if (abandoned) result.doneReason = 'abandoned'
-    result.totalMs = performance.now() - started
     return result
   }
 
@@ -402,6 +398,10 @@ export class OllamaClient {
       throw new OllamaError('stream', 'Ollama sent a reply that is not JSON')
     }
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function stringList(value: unknown): string[] {

@@ -59,6 +59,23 @@ describe('ChunkPlanner', () => {
     expect(second).toEqual([{ start: 920, end: 1_850 }])
   })
 
+  it('keeps a chunk within the limit once it is padded', () => {
+    const planner = new ChunkPlanner(options)
+    const chunks = [
+      ...planner.addSpeech(seconds(1, 8)),
+      // 14.8 s of speech since the first word: under the limit, but not with its padding.
+      ...planner.addSpeech(seconds(9, 15.8)),
+      ...planner.addSpeech(seconds(17, 20)),
+      ...planner.finish(21 * SECOND),
+    ]
+
+    expect(chunks).toEqual([
+      { start: 80, end: 830 },
+      { start: 880, end: 2_030 },
+    ])
+    for (const chunk of chunks) expect(chunk.end - chunk.start).toBeLessThanOrEqual(15 * SECOND)
+  })
+
   it('hands over a single stretch longer than the limit whole, for splitting by loudness', () => {
     const planner = new ChunkPlanner(options)
 

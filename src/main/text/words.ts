@@ -12,6 +12,9 @@ export interface Word {
   norm: string
   /** Position in the word list. */
   index: number
+  /** Where it is in the text: `text.slice(start, end)` is the word. */
+  start: number
+  end: number
   /** True when punctuation that ends a clause follows the word. */
   endsClause: boolean
   /** True when a full stop, question mark or exclamation mark follows the word. */
@@ -20,33 +23,42 @@ export interface Word {
   followedByPause: boolean
 }
 
-/** A word is letters and digits, with the marks that hold a number, address or name together. */
-const WORD = /[\p{L}\p{N}]+(?:['’.,:/@_-][\p{L}\p{N}]+)*/gu
+/**
+ * A word is letters and digits, with the marks that hold a number, address or name
+ * together. A combining mark belongs to the letter before it: an accent typed as a
+ * character of its own, or a vowel sign in Devanagari.
+ */
+const WORD = /[\p{L}\p{M}\p{N}]+(?:['’.,:/@_-][\p{L}\p{M}\p{N}]+)*/gu
 
-const NUMBER_WORDS: Record<string, string> = {
+// A Map, not an object: looked up with what was said, an object would answer
+// "constructor" or "toString" from its prototype.
+const NUMBER_WORDS = new Map(Object.entries({
   zero: '0', one: '1', two: '2', three: '3', four: '4', five: '5', six: '6', seven: '7',
   eight: '8', nine: '9', ten: '10', eleven: '11', twelve: '12', thirteen: '13',
   fourteen: '14', fifteen: '15', sixteen: '16', seventeen: '17', eighteen: '18',
   nineteen: '19', twenty: '20', thirty: '30', forty: '40', fifty: '50', sixty: '60',
   seventy: '70', eighty: '80', ninety: '90', hundred: '100', thousand: '1000',
   million: '1000000', billion: '1000000000',
-} // prettier-ignore
+})) // prettier-ignore
 
 /** "4,350" and "4350" are one number; "Three" and "3" are one number. */
-export function normalizeWord(text: string): string {
+function normalizeWord(text: string): string {
   const lower = text.normalize('NFKC').toLowerCase().replace(/’/g, "'")
   const ungrouped = lower.replace(/(\d),(?=\d{3}(?!\d))/g, '$1')
-  return NUMBER_WORDS[ungrouped] ?? ungrouped
+  return NUMBER_WORDS.get(ungrouped) ?? ungrouped
 }
 
 export function splitWords(text: string): Word[] {
   const words: Word[] = []
   for (const match of text.matchAll(WORD)) {
-    const after = text.slice(match.index + match[0].length).match(/^[^\p{L}\p{N}\s]*/u)?.[0] ?? ''
+    const end = match.index + match[0].length
+    const after = text.slice(end).match(/^[^\p{L}\p{M}\p{N}\s]*/u)?.[0] ?? ''
     words.push({
       text: match[0],
       norm: normalizeWord(match[0]),
       index: words.length,
+      start: match.index,
+      end,
       endsClause: /[.!?;:—]/.test(after),
       endsSentence: /[.!?]/.test(after),
       followedByPause: /[,.!?;:—]/.test(after),
@@ -55,10 +67,18 @@ export function splitWords(text: string): Word[] {
   return words
 }
 
-/** Sounds people make while thinking. They carry no meaning and are always removable. */
-const HESITATION = /^(?:u+m+|u+h+m*|e+r+m*|a+h+|h+m+|m+h*m+)$/
+/** How many words a text has. Where only a count may be kept of what was said, this is it. */
+export function countWords(text: string): number {
+  return splitWords(text).length
+}
 
-export function isHesitation(word: string): boolean {
+/** The shapes of the sounds people make while thinking, for building patterns from. */
+export const HESITATION_SOUND = String.raw`(?:u+m+|u+h+m*|e+r+m*|a+h+|h+m+|m+h*m+)`
+
+/** Sounds people make while thinking. They carry no meaning and are always removable. */
+const HESITATION = new RegExp(`^${HESITATION_SOUND}$`)
+
+function isHesitation(word: string): boolean {
   // ER, AH and UM in capitals are more likely an abbreviation than a sound.
   if (word.length > 1 && word === word.toUpperCase() && /\p{L}/u.test(word)) return false
   return HESITATION.test(word.toLowerCase())
@@ -96,7 +116,7 @@ const ENGLISH_COMMON = new Set([
 
 /** True when enough of the words are everyday English ones to say the text is English. */
 export function looksEnglish(text: string): boolean {
-  const words = text.toLowerCase().match(/[\p{L}']+/gu) ?? []
+  const words = text.toLowerCase().match(/[\p{L}\p{M}']+/gu) ?? []
   const common = words.filter((word) => ENGLISH_COMMON.has(word)).length
   return common >= 2 && common >= words.length * 0.15
 }

@@ -11,32 +11,33 @@ import { SAMPLE_RATE } from '../src/shared/audio-format'
 import { decodeWav } from '../src/shared/wav'
 import { wordErrorRate } from '../src/shared/wer'
 import { loadParakeet } from '../src/main/stt/engines/sherpa-parakeet'
-import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { adoptModel, modelDir } from '../src/main/stt/model-store'
-import { modelsRoot } from '../src/main/stt/models-dir'
+import { switches } from './lib/args.mjs'
+import { downloadedModel } from './lib/speech'
 
 const megabytes = (bytes: number): string => (bytes / 1_048_576).toFixed(0)
 /** Peak resident memory of this process. Node reports it in kilobytes on every platform. */
 const peakRss = (): number => process.resourceUsage().maxRSS * 1_024
 
 async function main(): Promise<void> {
-  const threadsFlag = process.argv.indexOf('--threads')
-  const threads = threadsFlag === -1 ? 4 : Number(process.argv[threadsFlag + 1])
-  const root = modelsRoot()
-  if (!(await adoptModel(root, DEFAULT_MODEL)).ready) {
-    throw new Error('The speech model is not downloaded. Run: npm run models:download')
-  }
+  const {
+    threads = 4,
+    filter = '',
+    'show-text': showText = false,
+  } = switches({
+    threads: { type: 'number' },
+    filter: { type: 'string' },
+    'show-text': { type: 'boolean' },
+  })
+  const model = await downloadedModel()
 
   const audioDir = join(__dirname, '..', 'tests', 'fixtures', 'audio')
-  const filterFlag = process.argv.indexOf('--filter')
-  const filter = filterFlag === -1 ? '' : (process.argv[filterFlag + 1] ?? '')
   const files = readdirSync(audioDir)
     .filter((name) => name.endsWith('.wav') && name.includes(filter))
     .sort()
   if (files.length === 0) throw new Error('No fixtures. Run: npm run fixtures')
 
   const rssBefore = process.memoryUsage().rss
-  const { engine, loadMs } = await loadParakeet(modelDir(root, DEFAULT_MODEL), threads)
+  const { engine, loadMs } = await loadParakeet(model, threads)
   const rssLoaded = process.memoryUsage().rss
 
   console.log(`\n### ${engine.id}, ${threads} threads\n`)
@@ -73,7 +74,7 @@ async function main(): Promise<void> {
         best
       ).toFixed(0)}× | ${(wer * 100).toFixed(1)}% |`,
     )
-    if (process.argv.includes('--show-text')) console.log(`\n> ${text}\n`)
+    if (showText) console.log(`\n> ${text}\n`)
   }
 
   console.log(`\n- Peak memory during the run: ${megabytes(peakRss())} MB`)

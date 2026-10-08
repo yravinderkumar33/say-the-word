@@ -23,8 +23,9 @@ struct TargetSnapshot {
 
 enum TargetComparison {
     case same
-    /// What differs: `unknownTarget`, `nothingFrontmost`, `app`, `window` or `element`.
-    /// It names a kind of difference only, never an app or its contents.
+    /// What differs: `unknownTarget`, `nothingFrontmost`, `app`, `appNotAnswering`,
+    /// `window` or `element`. It names a kind of difference only, never an app or its
+    /// contents.
     case changed(String)
     /// The focus is now in a password field; the value says what marked it as one.
     case secure(String)
@@ -44,7 +45,8 @@ final class TargetStore {
     let secureInput = SecureInputWatch()
 
     init() {
-        // On the system-wide element the timeout applies to the whole process.
+        // Set on the system-wide element, the timeout is the process's default: every
+        // element that has no timeout of its own uses it.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Self.messagingTimeout)
     }
 
@@ -108,7 +110,8 @@ final class TargetStore {
         let app = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(app, Self.messagingTimeout)
 
-        // The timeout belongs to each element, so the ones read from are given it too.
+        // The elements read from are also given the timeout as their own, which bounds
+        // their reads whatever the default is.
         let element = copyElement(app, kAXFocusedUIElementAttribute)
         if let element { AXUIElementSetMessagingTimeout(element, Self.messagingTimeout) }
         let window = element.flatMap { copyElement($0, kAXWindowAttribute) }
@@ -119,7 +122,6 @@ final class TargetStore {
             elementIsSecure: element.map(isSecureField) ?? false,
             secureInputEnabled: held != nil,
             secureInputHolderPid: held?.holder,
-            secureInputLeftOn: held?.leftOn ?? false,
             frontmostPid: pid,
             bundleId: bundleId
         )

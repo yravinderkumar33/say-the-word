@@ -9,8 +9,16 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { take } from './lib/build-output.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
+
+// electron-builder reads the build in out/ for a while: nobody builds over it meanwhile.
+const inUse = take('pack')
+if (inUse) {
+  console.error(inUse)
+  process.exit(1)
+}
 const staging = join(root, 'dist', '.staging')
 const staged = join(staging, 'mac-arm64')
 const final = join(root, 'dist', 'mac-arm64')

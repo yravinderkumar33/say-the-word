@@ -197,6 +197,41 @@ describe('what it may not do', () => {
     )
   })
 
+  // Long enough that one moved word, or two swapped ones, fit in the allowance for
+  // corrected words, and with neighbours that repeat, so the word moved still stands
+  // between the same kinds of word.
+  it('move a negation to a clause with the same words', () => {
+    expect(
+      reason(
+        'I think we will not ship on Monday and I think we will ship on Friday after the review',
+        'I think we will ship on Monday, and I think we will not ship on Friday after the review.',
+      ),
+    ).toBe('reordered')
+  })
+
+  it('swap two numbers between clauses with the same words', () => {
+    const input =
+      'please send 5 dollars to Anna and then send 7 dollars to Bob before we leave the office later today okay'
+    expect(
+      reason(
+        input,
+        'Please send 7 dollars to Anna and then send 5 dollars to Bob before we leave the office later today, okay.',
+      ),
+    ).toBe('reordered')
+    expect(
+      reason(
+        input,
+        'Please send 5 dollars to Anna and then send 7 dollars to Bob before we leave the office later today, okay.',
+      ),
+    ).toBe('ok')
+    expect(
+      reason(
+        'the call with Sam is at 3 pm and the call with Lee is at 5 pm so plan for both',
+        'The call with Sam is at 5 PM and the call with Lee is at 3 PM, so plan for both.',
+      ),
+    ).toBe('reordered')
+  })
+
   it('remove a word that only looks like a hesitation', () => {
     expect(reason('Wir treffen uns um 5 Uhr am Bahnhof', 'Wir treffen uns 5 Uhr am Bahnhof.')).toBe(
       'dropped',
@@ -296,5 +331,42 @@ describe('while the output is streaming', () => {
 
   it('waits for six words before judging', () => {
     expect(hasLeftTheTranscript(input, 'Roses are red')).toBe(false)
+  })
+})
+
+describe('quantity meaning (QA-08)', () => {
+  it.each([
+    ['the temperature is -15 degrees today', 'The temperature is 15 degrees today.'],
+    ['please pay $500 by next Friday', 'Please pay €500 by next Friday.'],
+    ['increase the budget by 5% this year', 'Increase the budget by 5 this year.'],
+    ['use +15 for the current offset', 'Use -15 for the current offset.'],
+    ['the acceptable range is 5 – 10 today', 'The acceptable range is 5 10 today.'],
+    ['the decimal value is 1.5 today', 'The decimal value is 15 today.'],
+    ['set the oven to 180° for an hour', 'Set the oven to 180 for an hour.'],
+    ['the shelf is 6′ wide and we need it', 'The shelf is 6 wide and we need it.'],
+  ])('rejects an ambiguous quantity edit', (input, output) => {
+    expect(checkCleanup({ input, output, doneReason: 'stop' }).ok).toBe(false)
+  })
+  it.each([
+    ['please pay $4350 by next Friday', 'Please pay $4,350 by next Friday.'],
+    ['the temperature is −15 degrees today', 'The temperature is -15 degrees today.'],
+    ['we need three more days', 'We need 3 more days.'],
+    ['please pay $500 no wait €600', 'Please pay €600.'],
+    ['um set the oven to 180° for an hour', 'Set the oven to 180° for an hour.'],
+  ])('allows formatting equivalents and explicit corrections', (input, output) => {
+    expect(checkCleanup({ input, output, doneReason: 'stop' }).ok).toBe(true)
+  })
+})
+
+describe('combining marks', () => {
+  it('reads an accent typed as a character of its own as part of its letter', () => {
+    const decomposed = 'meet me at the café at noon'.normalize('NFD')
+    const composed = 'Meet me at the café at noon.'.normalize('NFC')
+    expect(reason(decomposed, composed)).toBe('ok')
+  })
+
+  it('sees a changed vowel sign as a changed word', () => {
+    // "day" becoming "donation": the two words differ only in a Devanagari vowel sign.
+    expect(reason('कल दिन में आऊँगा', 'कल दान में आऊँगा')).toBe('invented')
   })
 })

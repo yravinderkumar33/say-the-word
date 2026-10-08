@@ -34,12 +34,20 @@ export class SttHost extends EventEmitter<SttHostEvents> {
   /** Workers ended on purpose; their exit is not a failure. */
   private readonly stopped = new WeakSet<UtilityProcess>()
   /**
+   * Fired when the worker in hand is stopped on purpose. Such a worker reports no exit,
+   * so whatever still waits on it listens for this too, and is told at once rather than
+   * at the end of its timeout.
+   */
+  private stopping = new AbortController()
+  /**
    * Results that arrived before anyone asked for them. A recording can end on its own
    * (the microphone goes away), and its transcript may then beat the request for it.
    */
   private readonly results = new Map<number, SessionResult>()
-  /** Transcripts being waited for, each as the function that tells it the worker has gone. */
-  private readonly waiting = new Set<() => void>()
+  /** Sessions up to this one were deleted (Delete Everything): a result for one is not kept. */
+  private discardedThrough = 0
+  /** Numbers the evaluation requests, so that each answer is matched to its request. */
+  private evaluationRequest = 0
 
   get running(): boolean {
     return this.child !== null
@@ -63,6 +71,7 @@ export class SttHost extends EventEmitter<SttHostEvents> {
       stdio: 'pipe',
     })
     this.child = child
+    this.stopping = new AbortController()
 
     this.whenReady = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -111,6 +120,7 @@ export class SttHost extends EventEmitter<SttHostEvents> {
   /** Loads the speech model. Takes about a second and roughly 1.9 GB of memory. */
   load(modelDir: string, numThreads: number, timeoutMs = 60_000): Promise<{ loadMs: number }> {
     return new Promise((resolve, reject) => {
+      const stopping = this.stopping.signal
       const done = (event: WorkerEvent): void => {
         if (event.t === 'loaded') {
           cleanup()
@@ -132,9 +142,11 @@ export class SttHost extends EventEmitter<SttHostEvents> {
         clearTimeout(timer)
         this.off('event', done)
         this.off('exit', onExit)
+        stopping.removeEventListener('abort', onExit)
       }
       this.on('event', done)
       this.on('exit', onExit)
+      stopping.addEventListener('abort', onExit)
       try {
         this.post({ t: 'load', modelDir, numThreads })
       } catch (error) {
@@ -154,6 +166,15 @@ export class SttHost extends EventEmitter<SttHostEvents> {
   }
 
   /**
+   * Everything said up to this session has been deleted. Results already held go, and one
+   * still on its way for such a session is not kept when it arrives.
+   */
+  discardThrough(session: number): void {
+    this.discardedThrough = Math.max(this.discardedThrough, session)
+    for (const id of [...this.results.keys()]) if (id <= session) this.results.delete(id)
+  }
+
+  /**
    * Drops a result kept for this session. Undo and Retry decode a session again under
    * the same id, and must not be handed what was left from the first attempt.
    */
@@ -164,6 +185,57 @@ export class SttHost extends EventEmitter<SttHostEvents> {
   /** Evaluation mode: has the worker write the session's recording to `path` when it ends. */
   saveAudio(session: number, path: string): void {
     if (this.child) this.post({ t: 'saveAudio', session, path })
+  }
+
+  releaseEvaluation(session: number): void {
+    if (this.child) this.post({ t: 'releaseEvaluation', session })
+  }
+
+  commitEvaluation(session: number): Promise<number> {
+    return this.evaluationOperation({
+      t: 'commitEvaluation',
+      session,
+      request: ++this.evaluationRequest,
+    })
+  }
+  discardEvaluation(sessions: number[]): Promise<number> {
+    return this.evaluationOperation({
+      t: 'discardEvaluation',
+      sessions,
+      request: ++this.evaluationRequest,
+    })
+  }
+  private evaluationOperation(
+    control: Extract<WorkerControl, { t: 'commitEvaluation' | 'discardEvaluation' }>,
+  ): Promise<number> {
+    if (!this.child) return Promise.resolve(control.t === 'commitEvaluation' ? 1 : 0)
+    return new Promise((resolve) => {
+      const stopping = this.stopping.signal
+      const cleanup = (): void => {
+        clearTimeout(timer)
+        this.off('event', done)
+        this.off('exit', gone)
+        stopping.removeEventListener('abort', gone)
+      }
+      const done = (event: WorkerEvent): void => {
+        if (event.t === 'evaluationDone' && event.request === control.request) {
+          cleanup()
+          resolve(event.failed)
+        }
+      }
+      const gone = (): void => {
+        cleanup()
+        resolve(control.t === 'commitEvaluation' ? 1 : 0)
+      }
+      const timer = setTimeout(() => {
+        cleanup()
+        resolve(1)
+      }, 5_000)
+      this.on('event', done)
+      this.on('exit', gone)
+      stopping.addEventListener('abort', gone)
+      this.post(control)
+    })
   }
 
   /**
@@ -188,6 +260,7 @@ export class SttHost extends EventEmitter<SttHostEvents> {
         return
       }
 
+      const stopping = this.stopping.signal
       const onEvent = (event: WorkerEvent): void => {
         if ((event.t !== 'final' && event.t !== 'failed') || event.session !== session) return
         cleanup()
@@ -209,12 +282,12 @@ export class SttHost extends EventEmitter<SttHostEvents> {
         clearTimeout(timer)
         this.off('event', onEvent)
         this.off('exit', onExit)
-        this.waiting.delete(onExit)
+        stopping.removeEventListener('abort', onExit)
         signal.removeEventListener('abort', onAbort)
       }
       this.on('event', onEvent)
       this.on('exit', onExit)
-      this.waiting.add(onExit)
+      stopping.addEventListener('abort', onExit)
       signal.addEventListener('abort', onAbort)
     })
   }
@@ -242,12 +315,13 @@ export class SttHost extends EventEmitter<SttHostEvents> {
     this.loadedEngine = null
     this.results.clear()
     child.kill()
-    // A worker stopped on purpose reports no exit, so anything still waiting for a
-    // transcript from it is told here rather than left to run into its timeout.
-    for (const lost of [...this.waiting]) lost()
+    // A worker stopped on purpose reports no exit, so anything still waiting on it (a
+    // transcript, the model's load, a recording to save) is told here instead.
+    this.stopping.abort()
   }
 
   private remember(result: SessionResult): void {
+    if (result.session <= this.discardedThrough) return
     this.results.set(result.session, result)
     while (this.results.size > KEPT_RESULTS) {
       const oldest = this.results.keys().next().value

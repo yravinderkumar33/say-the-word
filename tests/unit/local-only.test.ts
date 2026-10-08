@@ -6,7 +6,7 @@ const model = (name: string, extra: Partial<OllamaModel> = {}): OllamaModel => (
   name,
   digest: `digest-of-${name}`,
   capabilities: ['completion'],
-  parameterSize: '4B',
+  bytes: null,
   remote: false,
   ...extra,
 })
@@ -337,7 +337,7 @@ describe('LocalOnlyGate', () => {
     const offered = await gate.localTextModels()
 
     expect(offered.map((entry) => entry.name)).toEqual(['gemma4'])
-    expect(offered[0]).toMatchObject({ parameterSize: '8.0B', remote: false })
+    expect(offered[0]).toMatchObject({ remote: false })
     expect(asked).toEqual(['/api/tags', '/api/show'])
     expect(await gate.check('gemma4')).toEqual({
       local: true,

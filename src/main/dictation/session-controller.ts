@@ -1,3 +1,4 @@
+import type { PasteOutcome, PasteResult } from '@shared/helper-protocol'
 import {
   initialState,
   isRecording,
@@ -7,7 +8,7 @@ import {
   type MachineEvent,
   type MachineState,
 } from '../hotkeys/session-machine'
-import { RecoveryBuffer, type SessionOutcome } from './recovery-buffer'
+import { RecoveryBuffer, type RecoveryEntry, type SessionOutcome } from './recovery-buffer'
 
 /** Where a paste may go, recorded by the helper when recording stops. */
 export interface TargetInfo {
@@ -19,10 +20,9 @@ export interface TargetInfo {
    * is on in that app, which is all that can be known about it).
    */
   secureReason?: string | undefined
+  /** The app in front, as the system names it. Shown beside the text in the app's own window. */
+  appName?: string | undefined
 }
-
-/** `expired`: the helper could not get to the paste in time, and did not carry it out late. */
-export type PasteOutcome = 'pasted' | 'targetChanged' | 'secureField' | 'noPostAccess' | 'expired'
 
 export interface ProducedText {
   /** The recognizer's text, untouched. */
@@ -97,8 +97,10 @@ export interface SessionControllerDeps {
    * Called at most once per session.
    */
   produceText(session: SessionHandle): Promise<ProducedText | null>
-  captureTarget(): Promise<TargetInfo>
-  paste(request: { text: string; targetId: number }): Promise<PasteOutcome>
+  /** Reads where a paste may go, for this session; null for paste-last, which is for none. */
+  captureTarget(sessionId: number | null): Promise<TargetInfo>
+  /** `sessionId`: the session whose own text this is; null for paste-last. */
+  paste(request: { text: string; targetId: number; sessionId: number | null }): Promise<PasteResult>
   armEscape(armed: boolean): void
   writeClipboard(text: string): Promise<void>
   notify(notice: Notice): void
@@ -116,12 +118,28 @@ export interface SessionControllerDeps {
    * being worked out and pasted, and for as long as Undo or Retry is on offer.
    */
   forgetRecording?(sessionId: number): void
+  /** Called with a session's record whenever it is made or changed: the history is kept from these. */
+  onRecorded?(entry: RecoveryEntry): void
+  /**
+   * A session has ended, and its record says how: pasted, refused, failed, cancelled with
+   * a message, or interrupted. Called after that record is made, so that what is added to
+   * it (its timings) lands on something. Undo and Retry end a session again, and it is
+   * called again then; a press that left no trace, and a session Delete Everything took,
+   * never end in this sense.
+   */
+  onSessionOver?(sessionId: number): void
+  /**
+   * The text of an earlier session was fetched after all: pasted with the shortcut, or
+   * copied. Not called for a session whose own paste went through.
+   */
+  onFetched?(sessionId: number, how: 'pasted' | 'copied'): void
   /** For the double-tap window. Defaults to `setTimeout`; tests pass their own. */
   setTimer?(run: () => void, ms: number): unknown
   clearTimer?(handle: unknown): void
 }
 
 interface Session {
+  readonly generation: number
   readonly id: number
   readonly abort: AbortController
   /** The text being produced. Set when the recording stops. */
@@ -142,7 +160,7 @@ interface Session {
  *   never pastes either, but what was said is still transcribed and kept for recovery.
  */
 export class SessionController {
-  readonly recovery = new RecoveryBuffer()
+  readonly recovery: RecoveryBuffer
   private state: MachineState = initialState
   private current: Session | null = null
   /** An interrupted session whose text is still being produced for recovery. */
@@ -151,14 +169,63 @@ export class SessionController {
   private tapTimer: unknown = null
   /** A cancelled or failed session whose recording is still held: Undo or Retry can use it. */
   private redoable: number | null = null
+  private generation = 0
+  /** How many deletions of everything are under way: dictation waits for all of them. */
+  private discarding = 0
+  private readonly pastes = new Set<Promise<PasteResult>>()
+  get privacyBlocked(): boolean {
+    return this.discarding > 0
+  }
+  get privacyGeneration(): number {
+    return this.generation
+  }
+  /** Erases without invoking the cancellation path that intentionally salvages text. */
+  async discardAll(): Promise<void> {
+    this.discarding++
+    this.generation++
+    const ids = new Set(this.recovery.list().map((entry) => entry.sessionId))
+    for (const session of [this.current, this.salvaging])
+      if (session) {
+        ids.add(session.id)
+        session.abort.abort()
+      }
+    if (this.redoable !== null) ids.add(this.redoable)
+    this.current = null
+    this.salvaging = null
+    this.redoable = null
+    this.clearTapTimer()
+    this.recovery.clear()
+    this.state = initialState
+    for (const id of ids) this.deps.forgetRecording?.(id)
+    this.deps.armEscape(false)
+    this.deps.onStateChange?.('idle', null)
+    await Promise.allSettled([...this.pastes])
+  }
+  /** One deletion is over. Dictation resumes when no other is still under way. */
+  resumeAfterDiscard(): void {
+    this.discarding = Math.max(0, this.discarding - 1)
+  }
+  private trackedPaste(request: {
+    text: string
+    targetId: number
+    sessionId: number | null
+  }): Promise<PasteResult> {
+    const promise = this.deps.paste(request)
+    this.pastes.add(promise)
+    void promise.finally(() => this.pastes.delete(promise)).catch(() => {})
+    return promise
+  }
 
-  constructor(private readonly deps: SessionControllerDeps) {}
+  constructor(private readonly deps: SessionControllerDeps) {
+    this.recovery = new RecoveryBuffer(undefined, (entry) => deps.onRecorded?.(entry))
+  }
 
   get stateName(): MachineState['name'] {
     return this.state.name
   }
 
   dispatch(event: MachineEvent): void {
+    if (this.discarding > 0) return
     const before = this.state.name
     const { state, effects } = transition(this.state, event)
     this.state = state
@@ -177,6 +244,11 @@ export class SessionController {
     return this.current?.id ?? null
   }
 
+  /** The session whose text paste-last and copy-last would fetch: the last one that left any. */
+  get lastTextSession(): number | null {
+    return this.recovery.lastWithText()?.sessionId ?? null
+  }
+
   /** True when the session left text behind that Copy or paste-last can still reach. */
   hasText(sessionId: number): boolean {
     return this.recovery.list().some((entry) => entry.sessionId === sessionId && entry.finalText)
@@ -188,10 +260,17 @@ export class SessionController {
    */
   redo(): void {
     const sessionId = this.redoable
-    if (sessionId === null || this.state.name !== 'idle' || !this.deps.reproduceText) return
+    if (
+      this.discarding > 0 ||
+      sessionId === null ||
+      this.state.name !== 'idle' ||
+      !this.deps.reproduceText
+    )
+      return
     this.redoable = null
     const session: Session = {
       id: sessionId,
+      generation: this.generation,
       abort: new AbortController(),
       text: null,
       pasting: false,
@@ -233,6 +312,7 @@ export class SessionController {
       finalText: null,
     })
     this.deps.notify({ kind: 'failed', sessionId, message })
+    this.deps.onSessionOver?.(sessionId)
     this.dispatch({ type: 'sessionEnded' })
   }
 
@@ -254,6 +334,7 @@ export class SessionController {
         this.forgetRedo()
         const session: Session = {
           id: this.nextSessionId++,
+          generation: this.generation,
           abort: new AbortController(),
           text: null,
           pasting: false,
@@ -336,10 +417,12 @@ export class SessionController {
       reason,
       ...(canUndo ? { canUndo: true as const } : {}),
     })
+    this.deps.onSessionOver?.(session.id)
     // Text that still arrives is kept for recovery, and never pasted.
     session.text?.then(
       (produced) => {
-        if (produced?.final) this.recovery.fill(session.id, stagesOf(produced))
+        if (session.generation === this.generation && produced?.final)
+          this.recovery.fill(session.id, stagesOf(produced))
       },
       () => {},
     )
@@ -359,24 +442,34 @@ export class SessionController {
       // Nothing could be recovered.
     }
     if (this.salvaging === session) this.salvaging = null
-    this.recordCancelled(session, produced)
+    if (session.generation !== this.generation) return
+    this.recordCancelled(session, produced, true)
     // Nothing offers to run an interrupted session again.
     this.deps.forgetRecording?.(session.id)
     // A newer session has started since; its pill is not the place for this message.
-    if (session.abort.signal.aborted) return
-    this.deps.notify({
-      kind: 'interrupted',
-      sessionId: session.id,
-      hasText: Boolean(produced?.final),
-    })
+    // The text is the session's, which an earlier attempt may have left (an Undo that
+    // was interrupted in turn): Copy still reaches it.
+    if (!session.abort.signal.aborted) {
+      this.deps.notify({
+        kind: 'interrupted',
+        sessionId: session.id,
+        hasText: this.hasText(session.id),
+      })
+    }
+    this.deps.onSessionOver?.(session.id)
   }
 
-  private recordCancelled(session: Session, produced: ProducedText | null): void {
+  private recordCancelled(
+    session: Session,
+    produced: ProducedText | null,
+    interrupted = false,
+  ): void {
     this.recovery.record({
       sessionId: session.id,
       endedAt: this.deps.now(),
       outcome: 'cancelled',
       ...stagesOf(produced),
+      ...(interrupted ? { interrupted: true as const } : {}),
     })
   }
 
@@ -387,13 +480,15 @@ export class SessionController {
     let failure: string | null = null
     let reachedText = false
     let secureInput = false
+    let appName: string | null = null
     try {
       // The recording stops and the destination is fixed at the same moment, before
       // any processing delay.
       const text = this.textOf(session)
       text.catch(() => {}) // Reported below, or dropped along with a cancelled session.
-      const target = await this.deps.captureTarget()
+      const target = await this.deps.captureTarget(session.id)
       if (!this.isCurrent(session)) return
+      appName = target.appName ?? null
 
       reachedText = true
       produced = await text
@@ -406,9 +501,15 @@ export class SessionController {
         secureInput = target.secureReason === 'secureInput'
       } else {
         session.pasting = true
-        outcome = toSessionOutcome(
-          await this.deps.paste({ text: produced.final, targetId: target.targetId }),
-        )
+        const pasted = await this.trackedPaste({
+          text: produced.final,
+          targetId: target.targetId,
+          sessionId: session.id,
+        })
+        outcome = toSessionOutcome(pasted.outcome)
+        // The helper reads the destination again before it pastes, and may find Secure
+        // Input on in it by then.
+        secureInput = refusedForSecureInput(pasted)
       }
     } catch (error) {
       // A cancelled session's work is expected to fail; that is not a failure to report.
@@ -433,16 +534,22 @@ export class SessionController {
       }
     }
 
+    if (session.generation !== this.generation) return
     this.recovery.record({
       sessionId: session.id,
       endedAt: this.deps.now(),
       outcome,
       ...stagesOf(produced),
+      appName,
+      ...(secureInput ? { secureInput: true as const } : {}),
     })
     // The session is over. Its recording was held until now, so that a cancel at any
     // point before this could still be taken back; it is let go unless Retry needs it.
     if (this.redoable !== session.id) this.deps.forgetRecording?.(session.id)
     this.announce(session.id, outcome, failure, secureInput)
+    // Also when a cancel came while the paste was on its way: the gesture is over by now,
+    // and only this says how the session ended.
+    this.deps.onSessionOver?.(session.id)
 
     if (this.isCurrent(session)) {
       this.current = null
@@ -483,6 +590,7 @@ export class SessionController {
   }
 
   private async pasteLast(): Promise<void> {
+    const generation = this.generation
     const entry = this.recovery.lastWithText()
     if (!entry?.finalText) {
       this.deps.notify({ kind: 'nothingToPaste' })
@@ -490,29 +598,52 @@ export class SessionController {
     }
     try {
       // Paste-last is an explicit request, so the destination is wherever the user is now.
-      const target = await this.deps.captureTarget()
+      // It is no session's own paste, whichever session may have begun meanwhile.
+      const target = await this.deps.captureTarget(null)
+      if (generation !== this.generation) return
       if (target.secure) {
         this.announce(entry.sessionId, 'secureField', null, target.secureReason === 'secureInput')
         return
       }
-      const outcome = await this.deps.paste({ text: entry.finalText, targetId: target.targetId })
-      if (outcome !== 'pasted') this.announce(entry.sessionId, toSessionOutcome(outcome))
+      const pasted = await this.trackedPaste({
+        text: entry.finalText,
+        targetId: target.targetId,
+        sessionId: null,
+      })
+      if (generation !== this.generation) return
+      if (pasted.outcome !== 'pasted') {
+        this.announce(
+          entry.sessionId,
+          toSessionOutcome(pasted.outcome),
+          null,
+          refusedForSecureInput(pasted),
+        )
+      } else if (entry.outcome !== 'pasted') this.deps.onFetched?.(entry.sessionId, 'pasted')
     } catch {
+      if (generation !== this.generation) return
       this.deps.notify({ kind: 'pasteFailed', sessionId: entry.sessionId })
     }
   }
 
   private async copyLast(): Promise<void> {
+    const generation = this.generation
     const entry = this.recovery.lastWithText()
     if (!entry?.finalText) {
       this.deps.notify({ kind: 'nothingToPaste' })
       return
     }
     await this.deps.writeClipboard(entry.finalText)
+    if (generation !== this.generation) return
+    if (entry.outcome !== 'pasted') this.deps.onFetched?.(entry.sessionId, 'copied')
     this.deps.notify({ kind: 'copied' })
   }
 }
 
 function toSessionOutcome(outcome: PasteOutcome): SessionOutcome {
   return outcome === 'noPostAccess' || outcome === 'expired' ? 'pasteFailed' : outcome
+}
+
+/** The helper refused the paste on no more evidence than Secure Input being on in the app. */
+function refusedForSecureInput(result: PasteResult): boolean {
+  return result.outcome === 'secureField' && result.detail === 'secureInput'
 }

@@ -1,308 +1,247 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import type { AppStatus } from '@shared/ipc'
-import { modelStep, type ModelAction } from './model-step'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AppStatus, HubPage } from '@shared/ipc'
+import { About } from './About'
+import { InOrder } from './answers'
+import { Cleanup } from './Cleanup'
+import { ICONS, Icon, SavingBar } from './components'
+import { FirstRun } from './FirstRun'
+import { History } from './History'
+import { HistoryDetail } from './HistoryDetail'
+import { Home } from './Home'
+import { STATUS_UNREAD } from './home-status'
+import { Privacy } from './Privacy'
+import { Settings } from './Settings'
 
 const POLL_MS = 1_500
 
+interface NavItem {
+  page: HubPage
+  label: string
+  /** The icon's outline, on a 16 px grid. */
+  d: string
+}
+
+/** The pages, in two groups: what is used every day, and what is set once. */
+const NAV: NavItem[][] = [
+  [
+    {
+      page: 'home',
+      label: 'Home',
+      d: 'M2.5 7.2 8 2.8l5.5 4.4v5.8a.5.5 0 0 1-.5.5H10V9.5H6v4H3a.5.5 0 0 1-.5-.5z',
+    },
+    {
+      page: 'history',
+      label: 'History',
+      d: 'M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM8 5v3l2 1.5',
+    },
+    { page: 'cleanup', label: 'Cleanup', d: 'M3 4.5h10M3 8h7M3 11.5h4' },
+  ],
+  [
+    { page: 'settings', label: 'Settings', d: 'M2.5 5h11M2.5 11h11M6 3.2v3.6M10 9.2v3.6' },
+    { page: 'privacy', label: 'Privacy', d: 'M3.5 7.5h9v6h-9zM5.5 7.5V5.5a2.5 2.5 0 0 1 5 0v2' },
+    {
+      page: 'about',
+      label: 'About',
+      d: 'M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM8 7.3v3.7M8 5.2v.1',
+    },
+  ],
+]
+const PAGES = NAV.flat()
+
 /**
- * The setup window: the three things dictation needs (two permissions and the speech
- * model), each with its state and the one button that moves it forward. The full Hub
- * (onboarding, history, settings) arrives in Phase 6.
+ * The main window: a sidebar of pages and the page chosen. It opens on Home, which
+ * says whether dictation is ready and, when it is not, the one thing that is needed.
+ * Until the steps of the first launch have been gone through, it shows those instead.
  */
 export function App() {
-  const { status, error } = useStatus()
-
-  return (
-    <main className="mx-auto flex max-w-xl flex-col gap-5 px-10 py-8">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Whisper Flow</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Hold <Key>Fn</Key>, speak, and release. The text is typed where your cursor is. For a
-          longer dictation, press <Key>Fn</Key> twice or <Key>Fn</Key> + <Key>Space</Key>, speak
-          with your hands free, and press <Key>Fn</Key> again to stop. Everything runs on this Mac.
-        </p>
-      </header>
-
-      {error && <p className="text-sm text-red-600">Could not read status: {error}</p>}
-
-      {status && (
-        <>
-          {status.savingDictations && <SavingNotice />}
-          <Readiness status={status} />
-          <ol className="flex flex-col gap-3">
-            <AccessibilityStep status={status} />
-            <MicrophoneStep status={status} />
-            <ModelStep status={status} />
-          </ol>
-          <Details status={status} />
-        </>
-      )}
-    </main>
+  const { status, failed, refresh } = useStatus()
+  const [privacyRevision, setPrivacyRevision] = useState(0)
+  useEffect(
+    () =>
+      window.flowHub.onPrivacyReset(() => {
+        setPrivacyRevision((value) => value + 1)
+        setOpened(null)
+        refresh()
+      }),
+    [refresh],
   )
-}
+  const [page, setPage] = useState<HubPage>('home')
+  /** The dictation that is open on the History page, by its id. */
+  const [opened, setOpened] = useState<string | null>(null)
 
-function useStatus(): { status: AppStatus | null; error: string | null } {
-  const [status, setStatus] = useState<AppStatus | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    const refresh = (): void => {
-      window.flowHub.getStatus().then(
-        (next) => {
-          if (cancelled) return
-          setStatus(next)
-          setError(null)
-        },
-        (reason: unknown) => {
-          if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason))
-        },
-      )
-    }
-    refresh()
-    const timer = setInterval(refresh, POLL_MS)
-    return () => {
-      cancelled = true
-      clearInterval(timer)
-    }
+  const show = useCallback((next: HubPage): void => {
+    setPage(next)
+    setOpened(null)
   }, [])
+  // The menu's "Settings…" and "About" ask for a page from outside the window.
+  useEffect(() => window.flowHub.onNavigate(show), [show])
 
-  return { status, error }
-}
-
-function isReady(status: AppStatus): boolean {
-  return (
-    status.helper.tapInstalled === true &&
-    status.microphone === 'granted' &&
-    status.speech.modelDownloaded &&
-    status.speech.state !== 'failed' &&
-    // The files are there but the app has not taken them in yet: not ready until it has.
-    status.speech.state !== 'modelMissing'
-  )
-}
-
-function Readiness({ status }: { status: AppStatus }) {
-  if (isReady(status)) {
+  if (status?.firstRun)
     return (
-      <p className="rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
-        Ready. Click into any text field, hold <Key>Fn</Key> and speak.
-      </p>
+      <div className="flex h-full flex-col">
+        {status.savingDictations && (
+          <SavingBar
+            besideWindowButtons
+            onStop={() => void window.flowHub.stopSavingDictations().then(refresh, refresh)}
+          />
+        )}
+        <FirstRun key={privacyRevision} status={status} onChanged={refresh} />
+      </div>
     )
+
+  const open = (id: string): void => {
+    setPage('history')
+    setOpened(id)
   }
   return (
-    <p className="text-sm text-neutral-500">
-      Three things are needed before the first dictation. Each is asked for once.
-    </p>
-  )
-}
-
-/**
- * Shown for as long as dictations are being written to disk. It is the one setting
- * that keeps what was said, so it is said here in full, with the way to end it.
- */
-function SavingNotice() {
-  return (
-    <div
-      role="status"
-      className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
-    >
-      <p className="font-medium">Every dictation is being saved</p>
-      <p className="mt-1">
-        The recording and its text are written to a folder on this Mac, for checking how well the
-        recognizer does. They stay there until you delete them (menu-bar menu → Evaluation → Show
-        saved dictations).
-      </p>
-      <div className="mt-3">
-        <Button onClick={() => void window.flowHub.stopSavingDictations()}>Stop saving</Button>
-      </div>
+    <div className="flex h-full bg-bg text-body text-ink">
+      <Sidebar page={page} onPage={show} supportHost={status?.supportHost ?? null} />
+      <main key={privacyRevision} className="relative flex min-w-0 flex-1 flex-col">
+        {/* The window has no title bar: its top edge is what moves it. */}
+        <div className="drags-window-over-page absolute inset-x-0 top-0 h-11" />
+        {status?.savingDictations && (
+          <SavingBar
+            onStop={() => void window.flowHub.stopSavingDictations().then(refresh, refresh)}
+          />
+        )}
+        {/* In words of its own: the error's text is not for the window, and could say anything. */}
+        {failed && <p className="px-11 pt-[46px] text-problem">{STATUS_UNREAD}</p>}
+        {status && page === 'home' && (
+          <Home status={status} onChanged={refresh} onPage={show} onOpen={open} />
+        )}
+        {status && page === 'history' && (
+          <>
+            {/* The list stays as it was while one of its dictations is open: what was
+                searched for, the row the keyboard was on, how far it was scrolled. */}
+            <div className={opened ? 'hidden' : 'contents'}>
+              <History status={status} shown={!opened} onChanged={refresh} onOpen={setOpened} />
+            </div>
+            {opened && (
+              <HistoryDetail
+                id={opened}
+                status={status}
+                onBack={() => setOpened(null)}
+                onChanged={refresh}
+                onPage={show}
+              />
+            )}
+          </>
+        )}
+        {status && page === 'cleanup' && <Cleanup status={status} onChanged={refresh} />}
+        {status && page === 'settings' && <Settings status={status} onChanged={refresh} />}
+        {status && page === 'privacy' && <Privacy status={status} onChanged={refresh} />}
+        {status && page === 'about' && <About status={status} />}
+      </main>
     </div>
   )
 }
 
-function AccessibilityStep({ status }: { status: AppStatus }) {
-  const { helper } = status
-  const done = helper.accessibilityTrusted === true
-  return (
-    <Step
-      title="Accessibility"
-      done={done}
-      state={
-        !helper.running ? 'Helper not running' : done ? stepDone(helper.tapInstalled) : 'Needed'
-      }
-      action={
-        // The prompt is shown by the helper, so without it the button could do nothing.
-        done || !helper.running ? null : (
-          <Button onClick={() => void window.flowHub.requestAccessibility()}>
-            Open the permission prompt
-          </Button>
-        )
-      }
-    >
-      Lets Whisper Flow notice the <Key>Fn</Key> key and paste into the app you are using. It sees
-      shortcut keys only, never what you type.
-      {!status.packaged && <DevelopmentNote />}
-    </Step>
-  )
-}
-
-function stepDone(tapInstalled: boolean | null): string {
-  return tapInstalled ? 'Granted, shortcuts active' : 'Granted, starting shortcuts…'
-}
-
-function MicrophoneStep({ status }: { status: AppStatus }) {
-  const done = status.microphone === 'granted'
-  const refused = status.microphone === 'denied' || status.microphone === 'restricted'
-  return (
-    <Step
-      title="Microphone"
-      done={done}
-      state={done ? 'Granted' : refused ? 'Switched off' : 'Needed'}
-      action={
-        done ? null : (
-          <Button onClick={() => void window.flowHub.requestMicrophone()}>
-            {refused ? 'Open System Settings' : 'Allow the microphone'}
-          </Button>
-        )
-      }
-    >
-      On only while you dictate: while you hold the key, or from the start of a hands-free dictation
-      until you stop it. Audio is turned into text on this Mac and is not kept afterwards, unless
-      you switch on “Save every dictation” in the menu-bar menu.
-      {!status.packaged && <DevelopmentNote />}
-    </Step>
-  )
-}
-
-function ModelStep({ status }: { status: AppStatus }) {
-  const { speech } = status
-  const view = modelStep(speech)
-  const megabytes = Math.round(speech.modelBytes / 1_000_000)
-  const buttons: Record<ModelAction, ReactNode> = {
-    download: (
-      <Button onClick={() => void window.flowHub.downloadModel()}>Download ({megabytes} MB)</Button>
-    ),
-    tryAgain: <Button onClick={() => void window.flowHub.downloadModel()}>Try again</Button>,
-    cancel: <Button onClick={() => void window.flowHub.cancelDownload()}>Cancel</Button>,
-    checkFiles: (
-      <Button onClick={() => void window.flowHub.repairModel()}>Check the model files</Button>
-    ),
+/**
+ * The list of pages. It is one stop for the keyboard: the arrow keys move through it,
+ * and the page follows. The page in view is told by its fill and its weight, and by an
+ * outline as well when the system asks for more contrast.
+ */
+function Sidebar(props: {
+  page: HubPage
+  onPage: (page: HubPage) => void
+  supportHost: string | null
+}) {
+  const list = useRef<HTMLDivElement>(null)
+  const move = (step: number): void => {
+    const at = PAGES.findIndex((item) => item.page === props.page)
+    const next = PAGES[(at + step + PAGES.length) % PAGES.length]
+    if (!next) return
+    props.onPage(next.page)
+    list.current?.querySelector<HTMLElement>(`[data-page="${next.page}"]`)?.focus()
   }
   return (
-    <Step
-      title="Speech model"
-      done={view.done}
-      state={view.state}
-      action={view.action ? buttons[view.action] : null}
+    <nav
+      aria-label="Pages"
+      className="drags-window flex w-[212px] flex-none flex-col border-r border-line bg-sidebar px-2.5 pt-[52px] pb-4 compact:w-[180px] compact:px-2 compact:pb-3.5"
     >
-      {speech.modelLabel} turns speech into text. It is downloaded once; after that, dictation works
-      without a network connection.
-      {view.action === 'cancel' && (
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+      <div
+        ref={list}
+        className="flex flex-col"
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown') move(1)
+          else if (event.key === 'ArrowUp') move(-1)
+          else return
+          event.preventDefault()
+        }}
+      >
+        {NAV.map((group, index) => (
           <div
-            className="h-full rounded-full bg-neutral-900 transition-[width] duration-500 dark:bg-neutral-100"
-            style={{ width: `${(speech.downloadProgress ?? 0) * 100}%` }}
-          />
-        </div>
-      )}
-      {view.wouldNotStart && (
-        <span className="mt-2 block text-red-600">
-          The model is on this Mac but could not be started. Checking its files finds any that are
-          damaged and downloads those again.
-        </span>
-      )}
-      {speech.downloadError && view.action !== 'cancel' && (
-        <span className="mt-2 block text-red-600">
-          The download stopped: {speech.downloadError}. What was downloaded is kept.
-        </span>
-      )}
-    </Step>
-  )
-}
-
-function Step(props: {
-  title: string
-  done: boolean
-  state: string
-  action: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <li className="rounded-lg border border-neutral-200 p-4 dark:border-neutral-800">
-      <div className="flex items-baseline justify-between gap-4">
-        <h2 className="text-sm font-semibold">
-          <span
-            aria-hidden="true"
-            className={`mr-2 inline-block size-2 rounded-full align-middle ${
-              props.done ? 'bg-emerald-500' : 'bg-amber-500'
-            }`}
-          />
-          {props.title}
-        </h2>
-        <span className="text-xs text-neutral-500 tabular-nums">{props.state}</span>
-      </div>
-      <div className="mt-2 text-sm leading-relaxed text-neutral-600 dark:text-neutral-400">
-        {props.children}
-      </div>
-      {props.action && <div className="mt-3">{props.action}</div>}
-    </li>
-  )
-}
-
-function Button({ onClick, children }: { onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
-    >
-      {children}
-    </button>
-  )
-}
-
-function Key({ children }: { children: ReactNode }) {
-  return (
-    <kbd className="rounded border border-neutral-300 bg-neutral-100 px-1.5 py-0.5 font-sans text-[0.85em] font-medium text-neutral-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200">
-      {children}
-    </kbd>
-  )
-}
-
-/** In development macOS attributes permissions to the terminal that started the app. */
-function DevelopmentNote() {
-  return (
-    <span className="mt-2 block text-xs text-neutral-500">
-      Development build: macOS asks on behalf of the terminal that started the app.
-    </span>
-  )
-}
-
-function Details({ status }: { status: AppStatus }) {
-  const rows: Array<[string, string]> = [
-    ['App version', status.versions.app],
-    ['Build', status.packaged ? 'Packaged' : 'Development'],
-    ['Runtime', `Electron ${status.versions.electron}, Node ${status.versions.node}`],
-    [
-      'Helper',
-      status.helper.running
-        ? `Running, protocol ${status.helper.protocol ?? 'unknown'}`
-        : 'Not running',
-    ],
-    ['Speech engine', status.speech.engine ?? 'Not loaded'],
-  ]
-  return (
-    <details className="text-sm text-neutral-500">
-      <summary className="cursor-default select-none">Details</summary>
-      <dl className="mt-3 divide-y divide-neutral-200 rounded-lg border border-neutral-200 dark:divide-neutral-800 dark:border-neutral-800">
-        {rows.map(([label, value]) => (
-          <div key={label} className="flex items-center justify-between gap-6 px-4 py-2.5">
-            <dt>{label}</dt>
-            <dd className="font-medium text-neutral-800 tabular-nums dark:text-neutral-200">
-              {value}
-            </dd>
+            key={index}
+            className={`flex flex-col gap-0.5 compact:gap-px ${index > 0 ? 'mt-3.5 compact:mt-2' : ''}`}
+          >
+            {group.map((item) => {
+              const current = item.page === props.page
+              return (
+                <button
+                  key={item.page}
+                  type="button"
+                  data-page={item.page}
+                  aria-current={current ? 'page' : undefined}
+                  // One stop: the page in view. The arrows reach the others.
+                  tabIndex={current ? 0 : -1}
+                  onClick={() => props.onPage(item.page)}
+                  className={`flex h-7 items-center gap-2 rounded-control px-2.5 text-left whitespace-nowrap compact:h-[26px] ${
+                    current ? 'bg-fill-selected font-semibold shadow-selected' : ''
+                  }`}
+                >
+                  <Icon d={item.d} className={current ? '' : 'text-ink-2'} />
+                  <span>{item.label}</span>
+                </button>
+              )
+            })}
           </div>
         ))}
-      </dl>
-    </details>
+      </div>
+      <div className="flex-1" />
+      {/* Shown only once there is a page to open: a link that leads nowhere is not shown. */}
+      {props.supportHost && (
+        <button
+          type="button"
+          title={`Opens ${props.supportHost} in your browser`}
+          onClick={() => void window.flowHub.openLink('support')}
+          className="flex items-center gap-[7px] rounded-control px-2.5 py-1 text-left text-caption whitespace-nowrap text-ink-2"
+        >
+          <Icon d={ICONS.cup} size={14} strokeWidth={1.3} />
+          <span>Buy me a coffee</span>
+        </button>
+      )}
+    </nav>
   )
+}
+
+function useStatus(): { status: AppStatus | null; failed: boolean; refresh: () => void } {
+  const [status, setStatus] = useState<AppStatus | null>(null)
+  const [failed, setFailed] = useState(false)
+  /** Counts the askings: each change of it puts the question again. */
+  const [asking, setAsking] = useState(0)
+  const refresh = useCallback(() => setAsking((count) => count + 1), [])
+  // An answer older than the one shown is dropped. One that is only slow is shown when it
+  // comes: the status is asked for more often than a busy helper answers.
+  const [answers] = useState(() => new InOrder())
+
+  useEffect(() => {
+    const timer = setInterval(refresh, POLL_MS)
+    return () => clearInterval(timer)
+  }, [refresh])
+
+  useEffect(() => {
+    const isNews = answers.ask()
+    window.flowHub.getStatus().then(
+      (next) => {
+        if (!isNews()) return
+        setStatus(next)
+        setFailed(false)
+      },
+      () => {
+        if (isNews()) setFailed(true)
+      },
+    )
+  }, [asking, answers])
+
+  return { status, failed, refresh }
 }

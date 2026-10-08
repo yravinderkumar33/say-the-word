@@ -30,7 +30,10 @@ const bindingUpSchema = z.object({
   type: z.literal('bindingUp'),
   id: z.string(),
   t: z.number(),
-  /** `released` normally; `tapReset` when the tap was disabled and key state was lost. */
+  /**
+   * `released` normally; `tapReset` when the tap was disabled and key state was lost;
+   * `reconfigured` when the shortcut table was replaced while the shortcut was down.
+   */
   reason: z.string(),
 })
 const interruptedSchema = z.object({
@@ -69,7 +72,7 @@ export type HelperEvent = z.infer<typeof helperEventSchema>
 
 // --- Requests and replies ---------------------------------------------------------
 
-export const helperReplySchema = z.object({
+const helperReplySchema = z.object({
   id: z.number().int(),
   ok: z.boolean(),
   result: z.unknown().optional(),
@@ -89,7 +92,11 @@ export const targetResultSchema = z.object({
   secure: z.boolean(),
   /** What marked the field as a password field: `element` or `secureInput`. */
   secureReason: z.string().optional(),
-  /** Secure Event Input is on but was ignored: the app kept it on while it was not in front. */
+  /**
+   * Diagnostic only: the app in front holds Secure Event Input, and was seen earlier
+   * holding it while another app was in front. It changes no decision: `secure` says
+   * whether a paste is refused.
+   */
   secureInputStuck: z.boolean().optional(),
   hasElement: z.boolean(),
   hasWindow: z.boolean().optional(),
@@ -102,7 +109,7 @@ export type TargetResult = z.infer<typeof targetResultSchema>
  * `expired`: the helper got to the paste, or got back from reading the clipboard, after
  * the time the request said the app would stop waiting. Nothing was pasted.
  */
-export const pasteOutcomeSchema = z.enum([
+const pasteOutcomeSchema = z.enum([
   'pasted',
   'targetChanged',
   'secureField',
@@ -124,9 +131,7 @@ export type PasteResult = z.infer<typeof pasteResultSchema>
 
 export const permissionsResultSchema = z.object({
   accessibilityTrusted: z.boolean(),
-  postEventAccess: z.boolean(),
   tapInstalled: z.boolean(),
-  secureInput: z.boolean(),
 })
 export type PermissionsResult = z.infer<typeof permissionsResultSchema>
 
@@ -142,4 +147,3 @@ export const helperMessageSchema = z.union([
   helperEventSchema,
   helperReplySchema,
 ])
-export type HelperMessage = z.infer<typeof helperMessageSchema>

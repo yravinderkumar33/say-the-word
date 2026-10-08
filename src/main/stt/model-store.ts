@@ -46,7 +46,7 @@ export interface DownloadOptions {
  * go quiet without closing, and a download that waits for ever can be neither retried
  * nor reported. What has arrived is kept.
  */
-export const STALLED_AFTER_MS = 30_000
+const STALLED_AFTER_MS = 30_000
 
 const MARKER = '.verified.json'
 /**

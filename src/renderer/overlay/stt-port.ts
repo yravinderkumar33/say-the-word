@@ -24,13 +24,16 @@ export function listenForSttPort(onPort?: (port: MessagePort) => void): void {
 export function sttPort(timeoutMs: number): Promise<MessagePort> {
   if (current) return Promise.resolve(current)
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`no port to the speech worker within ${timeoutMs} ms`)),
-      timeoutMs,
-    )
-    waiting.push((port) => {
+    const deliver = (port: MessagePort): void => {
       clearTimeout(timer)
       resolve(port)
-    })
+    }
+    const timer = setTimeout(() => {
+      // Given up on: nothing is left waiting for the port.
+      const index = waiting.indexOf(deliver)
+      if (index >= 0) waiting.splice(index, 1)
+      reject(new Error(`no port to the speech worker within ${timeoutMs} ms`))
+    }, timeoutMs)
+    waiting.push(deliver)
   })
 }

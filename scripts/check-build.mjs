@@ -23,6 +23,7 @@ function expectMatch(label, dir, test) {
 console.log('Build assertions:')
 expectFile('main entry', out('main', 'index.js'))
 expectMatch('speech worker chunk', out('main'), (name) => /^stt-worker.*\.js$/.test(name))
+expectMatch('storage worker chunk', out('main'), (name) => /^storage-worker.*\.js$/.test(name))
 expectFile('overlay preload', out('preload', 'overlay.js'))
 expectFile('hub preload', out('preload', 'hub.js'))
 expectFile('overlay page', out('renderer', 'overlay.html'))

@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import '../styles.css'
 import { MicCapture, openMicrophoneCount } from './capture/mic-capture'
 import { Pill } from './Pill'
-import { acceptsClicks, initPillStore, setLevel } from './pill-store'
+import { acceptsClicks, initPillStore, setLevel, setMicrophone } from './pill-store'
 import { registerSmoke } from './smoke'
 import { listenForSttPort } from './stt-port'
 
@@ -37,7 +37,11 @@ window.flow.onCaptureCommand((command) => {
   switch (command.kind) {
     case 'start':
       // Device names only become visible once the microphone has been opened once.
-      void capture.start(command.session, command.deviceId).then(reportMicrophones)
+      void capture.start(command.session, command.deviceId).then(() => {
+        // The one that was opened: the pill names it if it turns out to hear nothing.
+        setMicrophone(capture.microphoneLabel)
+        return reportMicrophones()
+      })
       return
     case 'stop':
       void capture.stop(command.session)
@@ -58,6 +62,8 @@ window.flow.onCaptureCommand((command) => {
 })
 
 navigator.mediaDevices.addEventListener('devicechange', () => void reportMicrophones())
+// Their names can only be read once the microphone is allowed: the main process says when to look again.
+window.flow.onListMicrophones(() => void reportMicrophones())
 void reportMicrophones()
 
 createRoot(document.getElementById('root')!).render(

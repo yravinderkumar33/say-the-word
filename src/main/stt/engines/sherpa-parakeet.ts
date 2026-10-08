@@ -3,15 +3,14 @@ import { join } from 'node:path'
 import sherpa from 'sherpa-onnx-node'
 import { SAMPLE_RATE } from '@shared/audio-format'
 import { fixRecognizerArtifacts } from '../text-artifacts'
+import type { SpeechEngine } from '../transcriber'
 
-/** Turns audio into text. Kept small so another engine can be added behind it. */
-export interface SttEngine {
+/** A recognizer with a name. Kept small so another engine can be added behind it. */
+export interface SttEngine extends SpeechEngine {
   readonly id: string
-  /** `samples` are 16 kHz mono in [-1, 1]. */
-  transcribe(samples: Float32Array): Promise<{ text: string; decodeMs: number }>
 }
 
-export const PARAKEET_FILES = [
+const PARAKEET_FILES = [
   'encoder.int8.onnx',
   'decoder.int8.onnx',
   'joiner.int8.onnx',
@@ -26,8 +25,8 @@ export async function loadParakeet(
   modelDir: string,
   numThreads: number,
 ): Promise<{ engine: SttEngine; loadMs: number }> {
-  // sherpa-onnx ends the whole process on a bad configuration, so the files are
-  // checked here, where a missing one can be reported instead.
+  // sherpa-onnx answers a missing file with "Failed to create offline recognizer" and
+  // nothing more, so the files are checked here, where the missing one can be named.
   for (const name of PARAKEET_FILES) {
     if (!existsSync(join(modelDir, name))) throw new Error(`Speech model file missing: ${name}`)
   }

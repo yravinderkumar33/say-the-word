@@ -1,7 +1,3 @@
-out/
-dist/
-node_modules/
-native/flow-helper/.build/
 resources/
 .claude/
 docs/

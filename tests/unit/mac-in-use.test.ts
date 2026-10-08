@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { busyWith } from '../../scripts/lib/mac-in-use.mjs'
+import { busyWith, dictationAppIn } from '../../scripts/lib/mac-in-use.mjs'
 
 const HEADER = `2026-10-04 14:05:00 +0530
 Assertion status system-wide:
@@ -94,5 +94,62 @@ describe('whether someone is using the Mac', () => {
 
   it('finds nothing in output it cannot read', () => {
     expect(busyWith('')).toBeNull()
+  })
+})
+
+/** The Electron that runs this project from source, where `npm run dev` starts it. */
+const ELECTRON =
+  '/Users/me/whisper-flow/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron'
+/** Programs that are running on most Macs, and listen to nobody's dictation key. */
+const OTHERS = [
+  '/sbin/launchd',
+  '/Applications/Visual Studio Code.app/Contents/MacOS/Electron',
+  '/Applications/Slack.app/Contents/Frameworks/Slack Helper (Renderer).app/Contents/MacOS/Slack Helper (Renderer) --type=renderer',
+  '/Users/me/other-project/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron .',
+].join('\n')
+const listing = (...lines: string[]) => [OTHERS, ...lines].join('\n')
+
+describe('another app that would act on the keys a test posts', () => {
+  it('finds none among programs that listen to no dictation key', () => {
+    expect(dictationAppIn(OTHERS, ELECTRON)).toBeNull()
+    expect(dictationAppIn('', ELECTRON)).toBeNull()
+  })
+
+  it('finds Wispr Flow by its own executable', () => {
+    const wispr = '/Applications/Wispr Flow.app/Contents/MacOS/Wispr Flow'
+    expect(dictationAppIn(listing(wispr), ELECTRON)).toBe('Wispr Flow')
+  })
+
+  it('finds Whisper Flow in any build, started in any way', () => {
+    const packaged =
+      '/Users/me/whisper-flow/dist/mac-arm64/Whisper Flow Dev.app/Contents/MacOS/Whisper Flow Dev'
+    expect(dictationAppIn(listing(packaged), ELECTRON)).toBe('Whisper Flow Dev')
+    const hidden = '/Applications/Whisper Flow.app/Contents/MacOS/Whisper Flow --hidden'
+    expect(dictationAppIn(listing(hidden), ELECTRON)).toBe('Whisper Flow')
+  })
+
+  it('takes no helper process for its app', () => {
+    const helpers = [
+      '/Applications/Whisper Flow.app/Contents/Resources/bin/flow-helper',
+      '/Applications/Wispr Flow.app/Contents/Frameworks/Wispr Flow Helper (GPU).app/Contents/MacOS/Wispr Flow Helper (GPU) --type=gpu-process',
+      '/Users/me/whisper-flow/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper (Renderer).app/Contents/MacOS/Electron Helper (Renderer) --type=renderer',
+    ]
+    expect(dictationAppIn(listing(...helpers), ELECTRON)).toBeNull()
+  })
+
+  it('finds this project run from source, as npm run dev runs it, and says how it was started', () => {
+    expect(dictationAppIn(listing(`${ELECTRON} .`), ELECTRON)).toBe(
+      'Whisper Flow run from source (electron .)',
+    )
+    expect(dictationAppIn(listing(ELECTRON), ELECTRON)).toBe(
+      'Whisper Flow run from source (electron)',
+    )
+  })
+
+  it('leaves out an instance a test started, with --hidden', () => {
+    const quiet = `${ELECTRON} /Users/me/whisper-flow --hidden`
+    expect(dictationAppIn(listing(quiet), ELECTRON)).toBeNull()
+    const lookalike = `${ELECTRON} . --hidden-window`
+    expect(dictationAppIn(listing(lookalike), ELECTRON)).toMatch(/^Whisper Flow run from source/)
   })
 })

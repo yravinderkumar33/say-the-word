@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HelperEvent } from '@shared/helper-protocol'
+import { pillMessage } from '../../src/main/dictation/pill-messages'
 import { HelperBridge, PASTE_EXPIRY_MS } from '../../src/main/native/helper-bridge'
 
 const fakeHelper = fileURLToPath(new URL('../fixtures/fake-helper.mjs', import.meta.url))
@@ -34,7 +35,22 @@ function nextEvent(bridge: HelperBridge, type: HelperEvent['type']): Promise<Hel
 afterEach(() => {
   for (const bridge of bridges.splice(0)) bridge.stop()
   delete process.env['FAKE_HELPER_MODE']
+  vi.restoreAllMocks()
 })
+
+/** What the pill says for a dictation that failed with this error. */
+const onThePill = (error: unknown): string | undefined =>
+  pillMessage(
+    { kind: 'failed', sessionId: 1, message: error instanceof Error ? error.message : '' },
+    () => false,
+  )?.message
+
+/** Has the stand-in write this line, as if the helper had sent it of its own accord. */
+async function sendFromHelper(bridge: HelperBridge, event: unknown): Promise<void> {
+  await bridge['request']('emit', { event })
+  // Answered after the line above: by then the bridge has handled it.
+  await bridge.ping()
+}
 
 describe('HelperBridge', () => {
   it('reports ready and ignores stray output that is not part of the protocol', async () => {
@@ -106,11 +122,84 @@ describe('HelperBridge', () => {
     expect(await configured).toMatchObject({ reason: 'configured:1' })
   })
 
-  it('rejects a reply that does not have the expected shape', async () => {
+  it('rejects a reply that does not have the expected shape, in plain words', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     const bridge = startBridge('malformed')
     await bridge.whenReady()
 
-    await expect(bridge.checkPermissions()).rejects.toThrow()
+    const error = await bridge.checkPermissions().catch((reason: unknown) => reason)
+    await expect(bridge.checkPermissions()).rejects.toThrow('does not understand')
+
+    expect(error).toEqual(new Error('helper sent a reply this build does not understand'))
+    expect(onThePill(error)).toBe('The shortcut helper did not respond')
+    // The log names the fields that did not fit, and nothing of what they held, once.
+    expect(logged).toHaveBeenCalledTimes(1)
+    const line = String(logged.mock.calls[0]?.[0])
+    expect(line).toContain('accessibilityTrusted')
+    expect(line).not.toContain('yes')
+  })
+
+  it('names the helper in a refusal it sends, which the pill then puts into plain words', async () => {
+    const bridge = startBridge()
+    await bridge.whenReady()
+
+    const error = await bridge['request']('nonsense').catch((reason: unknown) => reason)
+
+    expect(error).toEqual(new Error('helper: unknown request type: nonsense'))
+    expect(onThePill(error)).toBe('The shortcut helper did not respond')
+  })
+
+  it('says once, by field, when a message of a known type does not have its shape', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const bridge = startBridge()
+    await bridge.whenReady()
+    const events: HelperEvent[] = []
+    bridge.on('event', (event) => events.push(event))
+
+    await sendFromHelper(bridge, { type: 'bindingDown', id: 4242, t: 1 })
+    await sendFromHelper(bridge, { type: 'bindingDown', id: 4242, t: 2 })
+    // A type this build does not know may come from a newer helper: dropped unsaid.
+    await sendFromHelper(bridge, { type: 'commandMode', id: 'x' })
+
+    expect(events).toEqual([])
+    expect(logged).toHaveBeenCalledTimes(1)
+    const line = String(logged.mock.calls[0]?.[0])
+    expect(line).toContain('"bindingDown"')
+    expect(line).toContain('id')
+    expect(line).not.toContain('4242')
+  })
+
+  it('sends no lone half of a surrogate pair, which the helper could not read', async () => {
+    const bridge = startBridge()
+    await bridge.whenReady()
+    const child = bridge['child']!
+    const lines: string[] = []
+    const write = child.stdin.write.bind(child.stdin)
+    vi.spyOn(child.stdin, 'write').mockImplementation((chunk: unknown) => {
+      lines.push(String(chunk))
+      return write(String(chunk))
+    })
+
+    const result = await bridge.paste({ text: 'a\uD800b\uD83D\uDE00', targetId: 7 })
+
+    expect(result).toEqual({ outcome: 'pasted' })
+    expect(JSON.parse(lines.at(-1) ?? '{}').text).toBe('a\uFFFDb\uD83D\uDE00')
+  })
+
+  it('does not act on output from a helper that has already exited', async () => {
+    const bridge = startBridge('crash')
+    await bridge.whenReady()
+    const child = bridge['child']!
+    const events: HelperEvent[] = []
+    bridge.on('event', (event) => events.push(event))
+    // Node can hand over a process's last output after it has reported the exit.
+    bridge.once('exit', () => {
+      child.stdout.emit('data', '{"type":"bindingDown","id":"ptt","t":1}\n')
+    })
+
+    await expect(bridge.checkPermissions()).rejects.toThrow('helper exited')
+
+    expect(events).toEqual([])
   })
 
   it('rejects requests when the helper is not running', async () => {

@@ -1,4 +1,5 @@
 import type { BrowserWindow } from 'electron'
+import { MAX_AUDIO_SAMPLES, SAMPLE_RATE } from '@shared/audio-format'
 import { IPC, captureEventSchema, type CaptureCommand, type SpeechState } from '@shared/ipc'
 import type { TranscriptEvent } from '@shared/stt-protocol'
 import { listenFromOwnPages } from '../security'
@@ -9,7 +10,7 @@ import type { EvaluationRecorder } from './evaluation-recorder'
 import { RecordingGoneError, type ProducedText, type SessionHandle } from './session-controller'
 
 /** Four threads matched the machine's four performance cores in the benchmark. */
-const DECODE_THREADS = 4
+export const DECODE_THREADS = 4
 /** Generous: a 30 s chunk decodes in well under a second. This only catches a hang. */
 const TRANSCRIPT_TIMEOUT_MS = 30_000
 /**
@@ -19,17 +20,18 @@ const TRANSCRIPT_TIMEOUT_MS = 30_000
  * tenth of the recording's length leaves a wide margin.
  */
 const TRANSCRIPT_TIMEOUT_PER_RECORDED_MS = 0.1
-/** A recording is stopped here, and what was said up to then is used. */
-export const MAX_RECORDING_MS = 20 * 60_000
+/**
+ * A recording is stopped here, and what was said up to then is used: the most audio the
+ * overlay and the worker hold for one recording.
+ */
+export const MAX_RECORDING_MS = (MAX_AUDIO_SAMPLES / SAMPLE_RATE) * 1_000
 /** The user is told this long before the limit. */
-export const LIMIT_WARNING_MS = 60_000
-/** The model holds about 1.9 GB of memory, so it is let go after a while without dictation. */
-const IDLE_UNLOAD_MS = 10 * 60_000
+const LIMIT_WARNING_MS = 60_000
 const WORKER_RESTART_MS = 1_000
 /** After this many crashes in a row the worker is left alone until the next dictation. */
 const MAX_CRASHES = 3
 
-export const MODEL_MISSING_MESSAGE = 'The speech model is not downloaded yet'
+const MODEL_MISSING_MESSAGE = 'The speech model is not downloaded yet'
 const NOT_STARTED_MESSAGE = 'Speech recognition could not start'
 
 export interface SpeechServiceDeps {
@@ -38,10 +40,13 @@ export interface SpeechServiceDeps {
   modelsRoot: string
   model?: ModelSpec
   microphoneId(): string | null
-  /** How long a recording may run before it is stopped. */
-  maxRecordingMs?(): number
-  /** Evaluation mode: where dictations are saved, or null while the mode is off. */
-  evaluation?(): EvaluationRecorder | null
+  /** How long a recording may run before it is stopped: `MAX_RECORDING_MS`, or less in a test. */
+  maxRecordingMs(): number
+  /**
+   * Evaluation mode: where dictations are saved, or null while the mode is off. The worker
+   * keeps the recording; what is saved is decided when the session is over.
+   */
+  evaluation?(session: number): EvaluationRecorder | null
   /** Tests only: return true to make the next transcript fail, with the recording kept. */
   failNextTranscript?(): boolean
   /** Audio has started to flow for a session. `openMs` is how long the microphone took. */
@@ -54,7 +59,14 @@ export interface SpeechServiceDeps {
   /** Timings of a finished transcript, for the latency log. */
   onTranscript?(session: number, result: TranscriptEvent): void
   onStateChange?(state: SpeechState): void
-  idleUnloadMs?: number
+  /**
+   * How long the model stays in memory after the last dictation; null for always. The
+   * model holds about 1.9 GB. Asked each time the countdown starts, so a change takes
+   * effect at once.
+   */
+  idleUnloadMs(): number | null
+  /** For the model download: `fetch`, or one that writes down where it goes. */
+  fetchImpl?: typeof fetch
 }
 
 /**
@@ -101,12 +113,6 @@ export class SpeechService {
 
     // A worker that dies is started again. The overlay still holds the audio of the
     // session in progress and sends it to the new worker when its port arrives.
-    deps.stt.on('event', (event) => {
-      if (event.t === 'audioSaveFailed') {
-        console.error(`[speech] could not save the evaluation recording: ${event.message}`)
-      }
-    })
-
     deps.stt.on('exit', () => {
       this.setState('stopped')
       if (this.quitting) return
@@ -163,6 +169,7 @@ export class SpeechService {
     this.download = download
     try {
       await downloadModel(this.deps.modelsRoot, this.model, {
+        ...(this.deps.fetchImpl ? { fetchImpl: this.deps.fetchImpl } : {}),
         signal: download.cancel.signal,
         onProgress: ({ overallBytes, overallTotal }) => {
           download.progress = overallBytes / overallTotal
@@ -239,7 +246,7 @@ export class SpeechService {
     this.askForAudio(session.id)
 
     this.send({ kind: 'start', session: session.id, deviceId: this.deps.microphoneId() })
-    const limit = this.deps.maxRecordingMs?.() ?? MAX_RECORDING_MS
+    const limit = this.deps.maxRecordingMs()
     this.clearLimit()
     this.limitTimer = setTimeout(() => this.deps.onRecordingEnded(session.id, 'limit'), limit)
     if (limit > LIMIT_WARNING_MS) {
@@ -266,10 +273,10 @@ export class SpeechService {
     const started = this.startedAt.get(session.id)
     if (started !== undefined) this.recordedMs.set(session.id, Date.now() - started)
     // Asked again here: a worker restarted since the session began has forgotten.
-    const recorder = this.askForAudio(session.id)
+    this.askForAudio(session.id)
     // The microphone is let go at once, whatever state the recognizer is in.
     this.send({ kind: 'stop', session: session.id })
-    return this.textOf(session, recorder)
+    return this.textOf(session)
   }
 
   /**
@@ -278,16 +285,37 @@ export class SpeechService {
    */
   async reproduceText(session: SessionHandle): Promise<ProducedText | null> {
     this.keepLoaded()
+    // The wait for the text ends with the session, and also once the recording turns out
+    // to be gone: nothing will be decoded then, and nobody would be left waiting for it.
+    const lost = new AbortController()
     const gone = new Promise<never>((_resolve, reject) => {
-      this.whenGone.set(session.id, () => reject(new RecordingGoneError()))
+      this.whenGone.set(session.id, () => {
+        reject(new RecordingGoneError())
+        lost.abort()
+      })
     })
+    // Cancelled in turn: the worker stops decoding it, and the overlay stops sending it.
+    // The recording stays held, for another Undo.
+    session.signal.addEventListener(
+      'abort',
+      () => {
+        this.send({ kind: 'cancel', session: session.id })
+        this.deps.stt.cancel(session.id)
+      },
+      { once: true },
+    )
     try {
       // The session is decoded again under the same id: whatever the first attempt
       // left behind must not be taken for the new result.
       this.deps.stt.forgetResult(session.id)
-      const text = this.textOf(session, null)
-      // If the recording turns out to be gone, nobody is left waiting for this one.
-      text.catch(() => {})
+      // A cancel took back the request for the recording; Undo and Retry make it again,
+      // so that the dictation they produce can be saved with its recording.
+      this.askForAudio(session.id)
+      const text = this.textOf({
+        id: session.id,
+        signal: AbortSignal.any([session.signal, lost.signal]),
+      })
+      text.catch(() => {}) // When the recording is gone, the race below says that instead.
       this.send({ kind: 'resend', session: session.id })
       return await Promise.race([text, gone])
     } finally {
@@ -298,12 +326,11 @@ export class SpeechService {
   /** The recording of this session will not be asked for again. */
   forget(sessionId: number): void {
     this.send({ kind: 'release', session: sessionId })
+    this.deps.stt.releaseEvaluation?.(sessionId)
+    this.deps.stt.forgetResult(sessionId)
   }
 
-  private async textOf(
-    session: SessionHandle,
-    recorder: EvaluationRecorder | null,
-  ): Promise<ProducedText | null> {
+  private async textOf(session: SessionHandle): Promise<ProducedText | null> {
     this.inHand.add(session.id)
     try {
       if (this.deps.failNextTranscript?.()) throw new Error('The recognizer took too long')
@@ -317,15 +344,6 @@ export class SpeechService {
       // text is still to be cleaned and pasted), and a cancel from here on can be
       // taken back only with the recording. The controller lets it go: `forget`.
       if (result.noSpeech || result.text.length === 0) return null
-      try {
-        recorder?.saveText(session.id, result.text)
-      } catch (error) {
-        // Evaluation mode is a side job: a full disk must not cost the dictation.
-        console.error(
-          '[speech] could not save the evaluation text:',
-          error instanceof Error ? error.message : error,
-        )
-      }
       return { raw: result.text, final: result.text }
     } finally {
       this.inHand.delete(session.id)
@@ -377,10 +395,14 @@ export class SpeechService {
       this.keepLoaded()
       return this.setState('ready')
     } catch (error) {
+      // The app is quitting, and stopped the worker under the load: nothing failed.
+      if (this.quitting) return this.current
       console.error('[speech] could not start:', error instanceof Error ? error.message : error)
+      // A worker lost mid-load has already been reported, and is being restarted. That
+      // says nothing about the model's files, which are not read again for it.
+      if (error instanceof WorkerLostError) return this.current
       if (await this.damagedFilesFound()) return this.setState('modelMissing')
-      // A worker lost mid-load has already been reported, and is being restarted.
-      return error instanceof WorkerLostError ? this.current : this.setState('failed')
+      return this.setState('failed')
     }
   }
 
@@ -444,10 +466,9 @@ export class SpeechService {
   }
 
   /** In evaluation mode, has the worker save this session's recording when it ends. */
-  private askForAudio(session: number): EvaluationRecorder | null {
-    const recorder = this.deps.evaluation?.() ?? null
+  private askForAudio(session: number): void {
+    const recorder = this.deps.evaluation?.(session)
     if (recorder) this.deps.stt.saveAudio(session, recorder.audioPath(session))
-    return recorder
   }
 
   private setState(state: SpeechState): SpeechState {
@@ -458,10 +479,14 @@ export class SpeechService {
     return state
   }
 
-  /** Restarts the countdown to unloading the model. */
-  private keepLoaded(): void {
+  /** Restarts the countdown to unloading the model. Also called when the time allowed has changed. */
+  keepLoaded(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer)
-    this.idleTimer = setTimeout(() => this.unload(), this.deps.idleUnloadMs ?? IDLE_UNLOAD_MS)
+    this.idleTimer = null
+    const idleMs = this.deps.idleUnloadMs()
+    // Null: it stays loaded for as long as the app runs.
+    if (idleMs === null) return
+    this.idleTimer = setTimeout(() => this.unload(), idleMs)
     this.idleTimer.unref()
   }
 

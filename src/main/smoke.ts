@@ -1,13 +1,19 @@
-import { app, ipcMain, type BrowserWindow } from 'electron'
-import { existsSync, readFileSync } from 'node:fs'
+import { app, type BrowserWindow } from 'electron'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { z } from 'zod'
 import { FRAME_SAMPLES, SAMPLE_RATE } from '@shared/audio-format'
 import { HELPER_PROTOCOL_VERSION } from '@shared/helper-protocol'
 import { IPC, type OverlaySmokeReport, type SmokeRequest } from '@shared/ipc'
 import type { WorkerEvent } from '@shared/stt-protocol'
 import { decodeWav } from '@shared/wav'
 import { wordErrorRate } from '@shared/wer'
+import { NO_TIMINGS } from './history/from-session'
+import { DECODE_THREADS } from './dictation/speech-service'
 import type { HelperBridge } from './native/helper-bridge'
+import { listenFromOwnPages } from './security'
+import { StorageHost } from './storage/storage-host'
 import { DEFAULT_MODEL } from './stt/model-catalog'
 import { adoptModel, modelDir } from './stt/model-store'
 import { modelsRoot } from './stt/models-dir'
@@ -38,9 +44,23 @@ interface SmokeParts {
 type ProbeAck = Extract<WorkerEvent, { t: 'probe-ack' }>
 
 const SMOKE_SESSION = 1
-const DECODE_THREADS = 4
 /** The recording is synthetic speech and the check is about plumbing, so this is loose. */
 const MAX_WORD_ERROR_RATE = 0.2
+
+const overlayReportSchema = z.object({
+  pageProtocol: z.string(),
+  workletLoaded: z.boolean(),
+  probePosted: z.boolean(),
+  framesPosted: z.number(),
+  error: z.string().exactOptional(),
+})
+const NOT_UNDERSTOOD: OverlaySmokeReport = {
+  pageProtocol: '',
+  workletLoaded: false,
+  probePosted: false,
+  framesPosted: 0,
+  error: 'the overlay page sent a report that could not be read',
+}
 
 class Skipped extends Error {}
 
@@ -146,8 +166,12 @@ export async function runSmoke({ helper, stt, overlay }: SmokeParts): Promise<Sm
     }
     stt.on('event', onEvent)
   })
+  // From the app's own page only, and checked, as everything a page sends is.
   const rendererReport = new Promise<OverlaySmokeReport>((resolve) => {
-    ipcMain.once(IPC.smokeReport, (_event, report: OverlaySmokeReport) => resolve(report))
+    listenFromOwnPages(IPC.smokeReport, (payload) => {
+      const parsed = overlayReportSchema.safeParse(payload)
+      resolve(parsed.success ? parsed.data : NOT_UNDERSTOOD)
+    })
   })
   const transcript = recording
     ? stt.transcript(SMOKE_SESSION, new AbortController().signal, 30_000)
@@ -202,6 +226,42 @@ export async function runSmoke({ helper, stt, overlay }: SmokeParts): Promise<Sm
         `${(result.audioMs / 1000).toFixed(1)} s of audio in ${result.decodeMs.toFixed(0)} ms, ` +
         `word error rate ${(errorRate * 100).toFixed(0)}%`
       )
+    }),
+  )
+
+  checks.push(
+    await check('the storage process keeps a dictation', async () => {
+      // In memory, in a folder of its own: nothing of anyone's is opened, and nothing is left.
+      const dir = mkdtempSync(join(tmpdir(), 'flow-smoke-storage-'))
+      const storage = new StorageHost({
+        history: { dir: join(dir, 'history'), keep: 'session', keepIsKnown: true, paused: false },
+        usageFile: join(dir, 'usage.json'),
+        weekStartsOn: 1,
+      })
+      try {
+        await storage.ready
+        storage.history.put({
+          id: 'smoke',
+          endedAt: Date.now(),
+          app: null,
+          outcome: 'pasted',
+          fetched: null,
+          mode: 'verbatim',
+          note: null,
+          heard: 'smoke test',
+          written: 'smoke test',
+          failure: null,
+          audioMs: null,
+          timings: NO_TIMINGS,
+        })
+        await storage.flush()
+        const page = await storage.history.page({ search: 'smoke', limit: 5 })
+        if (page.rows.length !== 1) throw new Error(`${page.rows.length} listed, 1 expected`)
+        return 'SQLite in its own process: written, and listed again'
+      } finally {
+        await storage.stop()
+        rmSync(dir, { recursive: true, force: true })
+      }
     }),
   )
 

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { OverlayBridge } from '@shared/bridge'
-import type { CaptureCommand, PillCue, PillState, SmokeRequest } from '@shared/ipc'
+import type { CaptureCommand, OverlayPrefs, PillCue, PillState, SmokeRequest } from '@shared/ipc'
 import { IPC } from '@shared/ipc-channels'
 
 // A MessagePort cannot pass through contextBridge, so the port to the speech worker
@@ -19,11 +19,17 @@ const bridge: OverlayBridge = {
   reportMicrophones(microphones) {
     ipcRenderer.send(IPC.microphones, microphones)
   },
+  onListMicrophones(handle) {
+    ipcRenderer.on(IPC.listMicrophones, () => handle())
+  },
   onPillState(handle) {
     ipcRenderer.on(IPC.pillState, (_event, state: PillState) => handle(state))
   },
   onPillCue(handle) {
     ipcRenderer.on(IPC.pillCue, (_event, cue: PillCue) => handle(cue))
+  },
+  onPrefs(handle) {
+    ipcRenderer.on(IPC.overlayPrefs, (_event, prefs: OverlayPrefs) => handle(prefs))
   },
   sendPillAction(action) {
     ipcRenderer.send(IPC.pillAction, action)

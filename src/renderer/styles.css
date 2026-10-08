@@ -1,4 +1,250 @@
 @import 'tailwindcss';
+@import './tokens.css';
+
+/*
+ * The tokens as Tailwind sees them, so that the windows are written in the names the
+ * design uses: `bg-sidebar`, `text-ink-2`, `rounded-control`, `text-status`.
+ */
+@theme inline {
+  --font-sans: var(--font);
+
+  --color-bg: var(--bg);
+  --color-sidebar: var(--bg-sidebar);
+  --color-card: var(--card);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-line: var(--line);
+  --color-fill: var(--fill);
+  --color-fill-strong: var(--fill-strong);
+  --color-fill-selected: var(--fill-selected);
+  --color-row-hover: var(--row-hover);
+  --color-control: var(--control);
+  --color-field: var(--field);
+  --color-mark-removed: var(--mark-removed);
+  --color-segment-on: var(--segment-on);
+  --color-knob: var(--knob);
+  --color-keycap: var(--key-bg);
+  --color-keycap-edge: var(--key-edge);
+  --color-keycap-base: var(--key-base);
+  --color-prominent: var(--prominent);
+  --color-on-prominent: var(--on-prominent);
+  --color-live: var(--live);
+  --color-problem: var(--problem);
+  --color-saving: var(--saving);
+  --color-saving-bg: var(--saving-bg);
+  --color-saving-line: var(--saving-line);
+  --color-app-tile: var(--app-tile);
+  --color-app-tile-ink: var(--app-tile-ink);
+  --color-meter-idle: var(--meter-idle);
+
+  --radius-key: 5px;
+  --radius-control: 6px;
+  --radius-segment: 7px;
+  --radius-card: 10px;
+
+  --shadow-control: var(--control-shadow);
+  --shadow-segment: var(--segment-on-shadow);
+  --shadow-knob: var(--knob-shadow);
+  --shadow-field: var(--field-shadow);
+  --shadow-selected: var(--sel-ring);
+  --shadow-chip: var(--chip-ring);
+  /* A card drawn with a hairline in place of a fill. */
+  --shadow-outline: inset 0 0 0 1px var(--line);
+  /* The choice in use: a keyline, not a colour. */
+  --shadow-chosen: inset 0 0 0 2px var(--ink);
+
+  --text-status: 28px;
+  --text-status--line-height: 1.2;
+  --text-status--font-weight: 600;
+  --text-status--letter-spacing: -0.015em;
+  --text-status-compact: 22px;
+  --text-status-compact--line-height: 1.2;
+  --text-status-compact--font-weight: 600;
+  --text-status-compact--letter-spacing: -0.01em;
+  --text-title: 22px;
+  --text-title--line-height: 1.2;
+  --text-title--font-weight: 600;
+  --text-title--letter-spacing: -0.01em;
+  --text-section: 15px;
+  --text-section--line-height: 1.3;
+  --text-section--font-weight: 600;
+  --text-lede: 15px;
+  --text-lede--line-height: 1.5;
+  --text-heading: 13px;
+  --text-heading--line-height: 1.3;
+  --text-heading--font-weight: 600;
+  --text-body: 13px;
+  --text-body--line-height: 1.45;
+  --text-caption: 12px;
+  --text-caption--line-height: 1.4;
+  --text-key: 11.5px;
+  --text-key--line-height: 1;
+  --text-key--font-weight: 500;
+}
+
+/*
+ * A window too small for the full layout. The sidebar narrows, the status line and the
+ * controls under it stay in place, and the rest scrolls beneath them.
+ */
+@custom-variant compact {
+  @media (max-width: 819px), (max-height: 599px) {
+    @slot;
+  }
+}
+
+/* --- The main window ---------------------------------------------------------------- */
+
+/* The window has no title bar of its own: these parts of the page move it. */
+.drags-window {
+  -webkit-app-region: drag;
+}
+
+/*
+ * The strip along the top of the page that moves the window lies over whatever is drawn
+ * there. The system takes a press on it for a drag, except on a control, which is marked
+ * below; the page must then find that control under the pointer, and not the strip. So
+ * the strip is not there for the pointer at all.
+ */
+.drags-window-over-page {
+  -webkit-app-region: drag;
+  pointer-events: none;
+}
+
+/*
+ * What a screen reader is told and the eye is not: the words behind a mark or a keycap.
+ * Outside any layer, so that no class put beside it can bring them into view.
+ */
+.only-spoken {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  /* Not part of a selection: copying a text must not bring these words along. */
+  user-select: none;
+}
+
+/* The bars of the pill as the first run draws them: moving, to say "live". Still with Reduce Motion. */
+@keyframes mirror-bar {
+  from {
+    transform: scaleY(0.35);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@keyframes mirror-sweep {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(18px);
+  }
+}
+
+/*
+ * The window's rules for its elements, in the layer of Tailwind's own reset: a class on
+ * an element takes precedence over them, as it does over the reset (`font-mono` on a
+ * field, `outline-offset-[-3px]` on the list, `outline-none` on a heading that is given
+ * the keyboard for a screen reader). Outside any layer they would win over every class.
+ */
+@layer base {
+  html.hub,
+  html.hub body,
+  html.hub #root {
+    height: 100%;
+  }
+
+  html.hub body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--ink);
+    font: 400 13px/1.45 var(--font);
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    cursor: default;
+  }
+
+  html.hub :is(button, select, a, input, textarea, [role='radio'], [role='option'], [tabindex]) {
+    -webkit-app-region: no-drag;
+  }
+
+  /* The keyboard's place on the page: a ring with a 2 px gap. 2 px wide, 3 px with Increase Contrast. */
+  html.hub
+    :is(
+      button,
+      select,
+      a,
+      input,
+      textarea,
+      [role='radio'],
+      [role='option'],
+      [tabindex]
+    ):focus-visible {
+    outline: var(--focus-width) solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  /* A field shows the keyboard's place around the whole of itself, not around the text inside it. */
+  html.hub .field:focus-within {
+    outline: var(--focus-width) solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  html.hub .field :is(input, textarea):focus-visible {
+    outline: none;
+  }
+
+  /* Text the user wrote, or said, can be selected and copied; the window's own words cannot. */
+  html.hub :is(input, textarea, [data-said]) {
+    user-select: text;
+    cursor: text;
+  }
+
+  html.hub :is(input, textarea) {
+    font: inherit;
+    color: inherit;
+  }
+
+  html.hub ::placeholder {
+    color: var(--ink-2);
+    opacity: 1;
+  }
+
+  /* A slider: a thin track with a round thumb, in the ink colour. */
+  html.hub input[type='range'] {
+    appearance: none;
+    height: 16px;
+    margin: 0;
+    background: transparent;
+    cursor: default;
+  }
+
+  html.hub input[type='range']::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(
+      to right,
+      var(--ink) 0 var(--filled, 50%),
+      var(--fill-strong) var(--filled, 50%) 100%
+    );
+  }
+
+  html.hub input[type='range']::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -6px;
+    border-radius: 50%;
+    background: var(--knob);
+    box-shadow: var(--thumb-shadow);
+  }
+}
+
+/* --- The overlay --------------------------------------------------------------------- */
 
 /* The overlay window is transparent; only the pill itself is painted. */
 html.overlay,
@@ -9,10 +255,8 @@ html.overlay body {
   cursor: default;
 }
 
-/* --- The pill ---------------------------------------------------------------------- */
-
 html.overlay {
-  /* Lets the pill's width animate to and from the width of its message. */
+  /* Lets the pill's width animate to and from the width of what it holds. */
   interpolate-size: allow-keywords;
 }
 
@@ -26,94 +270,140 @@ html.overlay {
   padding-bottom: 14px;
 }
 
+/* --- The pill ------------------------------------------------------------------------ */
+
 .pill {
-  --pill-ease: cubic-bezier(0.2, 0.9, 0.25, 1);
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
   box-sizing: border-box;
-  width: 40px;
-  height: 8px;
-  padding: 0;
+  width: max-content;
+  max-width: 400px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgb(14 14 16 / 0.5);
-  box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0.18),
-    0 2px 10px rgb(0 0 0 / 0.28);
-  color: white;
-  font:
-    500 12.5px/1 -apple-system,
-    BlinkMacSystemFont,
-    'SF Pro Text',
-    system-ui,
-    sans-serif;
+  background: var(--pill-bg);
+  box-shadow: var(--pill-shadow);
+  color: var(--pill-ink);
+  font: var(--pill-font);
   letter-spacing: 0.01em;
   white-space: nowrap;
   transition:
-    width 240ms var(--pill-ease),
-    height 240ms var(--pill-ease),
-    padding 240ms var(--pill-ease),
-    background-color 160ms linear;
+    width var(--dur-2) var(--ease),
+    height var(--dur-2) var(--ease),
+    padding var(--dur-2) var(--ease),
+    background-color var(--dur-1) linear,
+    box-shadow var(--dur-2) linear;
 }
 
-.pill[data-state='starting'],
-.pill[data-state='listening'] {
-  width: 78px;
+/* "Show it only while dictating": at rest there is nothing to see, and nothing to click. */
+.pill[data-shape='hidden'] {
+  width: 0;
+  height: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* At rest it all but disappears. It is still a button: a click starts a hands-free recording. */
+.pill[data-shape='rest'] {
+  width: 36px;
+  height: 6px;
+  padding: 0;
+  background: var(--pill-rest);
+  box-shadow: var(--pill-rest-shadow);
+}
+
+/* A little larger, with a mark in it: text that was not pasted is waiting to be fetched. */
+.pill[data-shape='rest'][data-waiting='true'] {
+  width: 44px;
+  height: 8px;
+}
+
+.pill[data-shape='hint'] {
+  height: 26px;
+  padding: 0 12px;
+}
+
+.pill[data-shape='waitingHint'] {
   height: 28px;
-  background: rgb(14 14 16 / 0.93);
+  padding: 0 4px 0 11px;
 }
 
-/* At rest it is a button: a click starts a hands-free recording. */
-.pill[data-state='resting']:hover {
-  width: 52px;
-  height: 10px;
-  background: rgb(14 14 16 / 0.85);
-}
-
-/* Hands-free: no key is held, so Stop and Cancel sit beside the bars. */
-.pill[data-state='listening'][data-hands-free='true'] {
-  width: 136px;
-  padding: 0 4px 0 16px;
-  justify-content: space-between;
-}
-
-.pill-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-/* Stop is the thing to press, so it is the one that stands out. */
-.pill-icon-button[data-icon='stop'] {
-  background: rgb(255 255 255 / 0.16);
-  color: white;
-}
-
-.pill-icon-button[data-icon='stop']:hover {
-  background: rgb(255 255 255 / 0.32);
-}
-
-.pill[data-state='processing'] {
-  width: 84px;
+/* The microphone has been asked for and is not live yet: it is too early to speak. */
+.pill[data-shape='mic'] {
   height: 28px;
-  padding: 0 4px 0 16px;
-  justify-content: space-between;
-  background: rgb(14 14 16 / 0.93);
+  padding: 0 15px;
 }
 
-.pill[data-state='recovery'] {
-  width: max-content;
-  max-width: 400px;
+/* Live. The pill is taller and the bars rise: shape says "speak now" as well as colour. */
+.pill[data-shape='mic'][data-live='true'] {
+  height: 30px;
+  padding: 0 16px;
+}
+
+/* Hands-free: no key is held, so the clock, Stop and Cancel sit beside the bars. */
+.pill[data-shape='handsFree'] {
+  height: 30px;
+  padding: 0 4px 0 15px;
+}
+
+.pill[data-shape='processing'] {
+  height: 24px;
+  padding: 0 13px;
+}
+
+.pill[data-shape='processing'][data-cancel='true'] {
+  padding: 0 4px 0 13px;
+}
+
+/* The key was pressed while the last dictation is still on its way: a small shake, and words. */
+.pill[data-shape='processing'][data-busy='true'] {
+  height: 28px;
+  animation: pill-nudge 360ms var(--ease);
+}
+
+.pill[data-shape='confirm'] {
+  height: 26px;
+  padding: 0 12px 0 10px;
+}
+
+.pill[data-shape='message'] {
   height: 32px;
-  padding: 0 5px 0 15px;
-  background: rgb(14 14 16 / 0.95);
+  padding: 0 5px 0 11px;
+}
+
+/* A red keyline reinforces a problem. The icon and the weight of the words carry it. */
+.pill[data-shape='message'][data-kind='problem'] {
+  box-shadow: var(--pill-shadow-problem);
+}
+
+/* What VoiceOver says for the pill. It is not drawn. */
+.pill-says {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* Whatever the pill holds fades in after the capsule has started to grow. */
-.pill > * {
-  animation: pill-in 200ms 60ms ease-out both;
+.pill-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  animation: pill-in var(--dur-2) 60ms ease-out both;
+}
+
+.pill[data-shape='mic'] .pill-inner,
+.pill[data-shape='handsFree'] .pill-inner {
+  gap: 10px;
+}
+
+.pill[data-shape='confirm'] .pill-inner {
+  gap: 6px;
 }
 
 @keyframes pill-in {
@@ -122,82 +412,138 @@ html.overlay {
   }
 }
 
+@keyframes pill-sweep {
+  from {
+    transform: translateX(-10px);
+  }
+  to {
+    transform: translateX(28px);
+  }
+}
+
+@keyframes pill-nudge {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  50% {
+    transform: translateX(4px);
+  }
+  80% {
+    transform: translateX(-2px);
+  }
+}
+
+.pill-words {
+  flex: none;
+}
+
+/* Hints and notes are said more quietly than what needs to be read. */
+.pill-words[data-dim='true'] {
+  color: var(--pill-ink-2);
+}
+
+.pill-words[data-small='true'] {
+  font-size: 11.5px;
+}
+
+/* A message can be longer than the pill is wide: it gives way before the buttons do. */
+.pill-words[data-shrink='true'] {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pill[data-kind='problem'] .pill-words {
+  font-weight: 600;
+}
+
+.pill[data-kind='note'] .pill-words {
+  color: var(--pill-ink-2);
+  font-weight: 400;
+}
+
+.pill-icon {
+  flex: none;
+  color: var(--pill-ink);
+}
+
+.pill[data-kind='problem'] .pill-icon {
+  color: var(--pill-problem);
+}
+
+.pill[data-kind='note'] .pill-icon {
+  color: var(--pill-ink-2);
+}
+
+.pill-dot {
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--pill-ink);
+}
+
 .pill-bars {
   display: flex;
   align-items: center;
   gap: 3px;
-  height: 16px;
+  height: 18px;
 }
 
 .pill-bars span {
   width: 3px;
-  height: 16px;
+  height: 3px;
   border-radius: 2px;
-  background: white;
-  transform: scaleY(0.14);
+  background: var(--pill-idle);
+  transition: background-color var(--dur-2) linear;
 }
 
-/* Flat, dim and slowly breathing: the microphone is not being heard yet. */
-.pill[data-state='starting'] .pill-bars {
-  animation: pill-waiting 1.1s ease-in-out infinite;
+/* The one colour on the pill: the microphone is live, and you are being heard. */
+.pill-bars[data-live='true'] span {
+  background: var(--pill-live);
 }
 
-/* The bars are already there when the pill goes live. Without this they would start
-   the fade-in again and blink out at the very moment that says "speak now". */
-.pill[data-state='listening'] .pill-bars {
-  animation: none;
+.pill-clock {
+  flex: none;
+  font-variant-numeric: tabular-nums;
 }
 
-@keyframes pill-waiting {
-  0%,
-  100% {
-    opacity: 0.5;
-  }
-  50% {
-    opacity: 0.2;
-  }
+/* The last minute before a recording is stopped: the clock counts down, and says so more firmly. */
+.pill-clock[data-last='true'] {
+  font-weight: 600;
 }
 
-.pill-dots {
+.pill-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
-.pill-dots span {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: white;
-  animation: pill-dot 1s ease-in-out infinite;
-}
-
-.pill-dots span:nth-child(2) {
-  animation-delay: 150ms;
-}
-
-.pill-dots span:nth-child(3) {
-  animation-delay: 300ms;
-}
-
-@keyframes pill-dot {
-  0%,
-  60%,
-  100% {
-    opacity: 0.28;
-    transform: translateY(0);
-  }
-  30% {
-    opacity: 1;
-    transform: translateY(-2px);
-  }
-}
-
-.pill-message {
-  min-width: 0;
+/* The line a light travels along while the text is on its way. */
+.pill-track {
+  position: relative;
+  flex: none;
+  width: 28px;
+  height: 3px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  color: rgb(255 255 255 / 0.92);
+  border-radius: 2px;
+  background: var(--pill-track);
+}
+
+.pill-sweep {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--pill-ink);
+  animation: pill-sweep 800ms var(--ease) infinite alternate;
 }
 
 .pill-button {
@@ -206,16 +552,16 @@ html.overlay {
   padding: 0 10px;
   border: 0;
   border-radius: 999px;
-  background: rgb(255 255 255 / 0.16);
-  color: white;
+  background: var(--pill-btn);
+  color: var(--pill-btn-ink);
   font: inherit;
   font-weight: 600;
   cursor: default;
-  transition: background-color 120ms linear;
+  transition: background-color var(--dur-1) linear;
 }
 
 .pill-button:hover {
-  background: rgb(255 255 255 / 0.28);
+  background: var(--pill-btn-hover);
 }
 
 .pill-icon-button {
@@ -228,27 +574,47 @@ html.overlay {
   border: 0;
   border-radius: 50%;
   background: transparent;
-  color: rgb(255 255 255 / 0.55);
+  color: var(--pill-ink-2);
   cursor: default;
   transition:
-    background-color 120ms linear,
-    color 120ms linear;
+    background-color var(--dur-1) linear,
+    color var(--dur-1) linear;
 }
 
 .pill-icon-button:hover {
-  background: rgb(255 255 255 / 0.16);
-  color: white;
+  background: var(--pill-btn);
+  color: var(--pill-btn-ink);
+}
+
+/* Stop is the thing to press, so it is the one that stands out. */
+.pill-stop {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pill-ink);
+  cursor: default;
+}
+
+.pill-stop span {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--pill-bg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pill,
-  .pill > * {
-    transition: none;
-    animation: none;
+  /* No shake. */
+  .pill {
+    animation: none !important;
   }
 
-  .pill[data-state='starting'] .pill-bars,
-  .pill-dots span {
-    animation: none;
+  /* The light stops, held in the middle of its line. */
+  .pill-sweep {
+    transform: translateX(9px);
   }
 }

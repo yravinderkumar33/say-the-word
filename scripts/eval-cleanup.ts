@@ -14,33 +14,31 @@
 // there is always a final text, cleanup never takes longer than its ceiling, and text
 // the guard refused is never used.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { FRAME_SAMPLES, SAMPLE_RATE } from '../src/shared/audio-format'
+import { SAMPLE_RATE } from '../src/shared/audio-format'
 import { decodeWav } from '../src/shared/wav'
 import { alignWords, comparableWords, correctionRate, type WordEdit } from '../src/shared/wer'
 import { LocalOnlyGate } from '../src/main/cleanup/local-only'
 import { OllamaClient } from '../src/main/cleanup/ollama-client'
 import { CLEANUP_CEILING_MS, Refiner, type Refined } from '../src/main/cleanup/refiner'
-import { loadParakeet } from '../src/main/stt/engines/sherpa-parakeet'
-import { DEFAULT_MODEL } from '../src/main/stt/model-catalog'
-import { adoptModel, modelDir } from '../src/main/stt/model-store'
-import { modelsRoot } from '../src/main/stt/models-dir'
-import { Transcriber, type TranscriberEvent } from '../src/main/stt/transcriber'
-import { VoiceDetector } from '../src/main/stt/vad'
+import { evaluationDir } from '../src/main/dictation/evaluation-recorder'
+import { switches } from './lib/args.mjs'
+import { readCorrected } from './lib/evaluation-text'
+import { loadSpeech, transcribe } from './lib/speech'
 
-const args = process.argv.slice(2)
-const option = (name: string): string | null => {
-  const index = args.indexOf(name)
-  return index === -1 ? null : (args[index + 1] ?? '')
-}
-const useSamples = args.includes('--samples')
-const quiet = args.includes('--quiet')
-const model = option('--model') ?? 'qwen3.5:4b'
-const dir =
-  option('--dir') ??
-  process.env['WHISPER_FLOW_EVAL_DIR'] ??
-  join(homedir(), 'Library', 'Application Support', 'Whisper Flow', 'evaluation')
+const {
+  samples: useSamples = false,
+  quiet = false,
+  model = 'qwen3.5:4b',
+  dir = evaluationDir(),
+} = switches({
+  samples: { type: 'boolean' },
+  quiet: { type: 'boolean' },
+  model: { type: 'string' },
+  dir: { type: 'string' },
+})
+/** The script's own sentence, tidied once before anything is timed. */
+const WARM_UP = 'um so this is the the sentence that has the model loaded before anything is timed'
 
 interface Item {
   name: string
@@ -71,38 +69,13 @@ async function loadDictations(): Promise<Item[]> {
     .sort()
   if (names.length === 0) return []
 
-  const root = modelsRoot()
-  if (!(await adoptModel(root, DEFAULT_MODEL)).ready) {
-    throw new Error('The speech model is not downloaded. Run: npm run models:download')
-  }
-  const speech = modelDir(root, DEFAULT_MODEL)
-  const { engine } = await loadParakeet(speech, 4)
-  const detector = new VoiceDetector(join(speech, 'silero_vad.onnx'))
-
+  const speech = await loadSpeech()
   const items: Item[] = []
-  let session = 0
   for (const name of names) {
     const audio = decodeWav(readFileSync(join(dir, `${name}.wav`)))
     if (audio.sampleRate !== SAMPLE_RATE) continue
-    session += 1
-    const events: TranscriberEvent[] = []
-    const transcriber = new Transcriber(engine, detector, (event) => events.push(event))
-    transcriber.begin(session)
-    let frames = 0
-    for (let offset = 0; offset < audio.samples.length; offset += FRAME_SAMPLES) {
-      transcriber.acceptFrame(
-        session,
-        frames++,
-        audio.samples.slice(offset, offset + FRAME_SAMPLES),
-      )
-    }
-    await transcriber.end(session, frames)
-    const result = events.find((event) => event.t === 'final')
-    const intended = readFileSync(join(dir, `${name}.txt`), 'utf8')
-      .split('\n')
-      .filter((line) => !/^\s*(#[\p{L}\p{N}-]+\s*)+$/u.test(line))
-      .join('\n')
-      .trim()
+    const { result } = await transcribe(speech, audio.samples)
+    const intended = readCorrected(readFileSync(join(dir, `${name}.txt`), 'utf8')).text
     if (result?.t === 'final' && intended) items.push({ name, heard: result.text, intended })
   }
   return items
@@ -140,9 +113,11 @@ async function main(): Promise<void> {
   }
 
   const refiner = new Refiner({ client, gate, model: () => model, dictionary: () => [] })
-  // The first request pays for loading the model; the app does this at key-down.
+  // The app has the model loaded while the person speaks. Here it is loaded before anything
+  // is timed, through the Refiner as in the app: the model is sent its instructions alone
+  // first, and its reply says where it runs before any text is sent to it.
   const warmStarted = performance.now()
-  await client.warm(model, [{ role: 'user', content: 'ready' }])
+  await refiner.refine(WARM_UP, new AbortController().signal, { patient: true })
   const warmMs = performance.now() - warmStarted
 
   const results: Array<{ item: Item; refined: Refined }> = []
@@ -171,7 +146,8 @@ async function main(): Promise<void> {
     `Ollama ${version}, model ${model}, ${results.length} ${useSamples ? 'written samples' : 'dictations'}.`,
   )
   console.log(
-    `Loading the model took ${(warmMs / 1000).toFixed(1)} s (the app does this while you speak).\n`,
+    `Loading the model and tidying a first sentence took ${(warmMs / 1000).toFixed(1)} s ` +
+      '(the app loads it while you speak).\n',
   )
   console.log('| Text | Corrections needed, on average |')
   console.log('|---|---|')

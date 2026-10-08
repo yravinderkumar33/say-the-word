@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   clipboardMessage,
   describeNotice,
+  noteMessage,
   pillMessage,
+  recordingEndedMessage,
 } from '../../src/main/dictation/pill-messages'
 import type { Notice } from '../../src/main/dictation/session-controller'
 
@@ -40,6 +42,7 @@ describe('pillMessage', () => {
     const failed: Notice = { kind: 'failed', sessionId: 4, message: 'The recognizer took too long' }
     expect(pillMessage(failed, withText)).toEqual({
       message: 'The recognizer took too long',
+      messageKind: 'problem',
       canCopy: true,
       sound: true,
     })
@@ -75,6 +78,7 @@ describe('pillMessage', () => {
   it('stays silent for things the user did on purpose', () => {
     expect(pillMessage({ kind: 'cancelled', sessionId: 1, reason: 'escape' }, withText)).toEqual({
       message: 'Cancelled',
+      messageKind: 'plain',
       canCopy: false,
       sound: false,
     })
@@ -114,11 +118,68 @@ describe('pillMessage', () => {
   })
 })
 
+describe('the kind of each message', () => {
+  const kindOf = (notice: Notice): string | undefined => pillMessage(notice, withText)?.messageKind
+
+  it('is "protected" when the app refused on purpose and the text is safe', () => {
+    expect(kindOf({ kind: 'targetChanged', sessionId: 1 })).toBe('protected')
+    expect(kindOf({ kind: 'secureField', sessionId: 1 })).toBe('protected')
+    expect(kindOf({ kind: 'secureField', sessionId: 1, because: 'secureInput' })).toBe('protected')
+  })
+
+  it('is "problem" when something failed', () => {
+    expect(kindOf({ kind: 'pasteFailed', sessionId: 1 })).toBe('problem')
+    expect(kindOf({ kind: 'interrupted', sessionId: 1, hasText: true })).toBe('problem')
+    expect(kindOf({ kind: 'interrupted', sessionId: 1, hasText: false })).toBe('problem')
+    expect(kindOf({ kind: 'failed', sessionId: 1, message: 'No microphone was found' })).toBe(
+      'problem',
+    )
+    expect(recordingEndedMessage('limit')).toMatchObject({
+      message: 'Stopped at the 20-minute limit',
+      messageKind: 'problem',
+      sound: true,
+    })
+    expect(recordingEndedMessage('microphoneLost')).toMatchObject({
+      message: 'The microphone disconnected',
+      messageKind: 'problem',
+    })
+  })
+
+  it('marks a recording stopped at the limit as such, which the pill reads instead of the words', () => {
+    expect(recordingEndedMessage('limit').stoppedAtLimit).toBe(true)
+    expect(recordingEndedMessage('microphoneLost').stoppedAtLimit).toBeFalsy()
+  })
+
+  it('is "plain" for what the user did, or did not say', () => {
+    expect(kindOf({ kind: 'cancelled', sessionId: 1, reason: 'escape' })).toBe('plain')
+    expect(kindOf({ kind: 'noSpeech', sessionId: 1 })).toBe('plain')
+  })
+
+  it('is "confirm", with nothing to press, for what was done as asked', () => {
+    for (const notice of [{ kind: 'copied' }, { kind: 'nothingToPaste' }] as Notice[]) {
+      const pill = pillMessage(notice, withText)
+      expect(pill, notice.kind).toMatchObject({ messageKind: 'confirm', canCopy: false })
+      expect(pill, notice.kind).not.toHaveProperty('redo')
+    }
+  })
+
+  it('is "note", with the sound, for a thing outside a dictation that did not happen', () => {
+    expect(noteMessage('That setting could not be saved')).toEqual({
+      message: 'That setting could not be saved',
+      messageKind: 'note',
+      canCopy: false,
+      sound: true,
+    })
+    expect(clipboardMessage('failed')).toMatchObject({ messageKind: 'note' })
+  })
+})
+
 describe('Undo and Retry', () => {
   it('offers Undo on a cancel that can be taken back, and nothing otherwise', () => {
     const undoable: Notice = { kind: 'cancelled', sessionId: 1, reason: 'escape', canUndo: true }
     expect(pillMessage(undoable, withoutText)).toEqual({
       message: 'Cancelled',
+      messageKind: 'plain',
       canCopy: false,
       sound: false,
       redo: 'Undo',
@@ -165,6 +226,7 @@ describe('clipboardMessage', () => {
   it('says so, quietly, when the clipboard could not be kept through a paste', () => {
     expect(clipboardMessage('notSaved')).toEqual({
       message: 'The clipboard now holds this dictation',
+      messageKind: 'note',
       canCopy: false,
       sound: false,
     })

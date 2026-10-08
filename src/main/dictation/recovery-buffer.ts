@@ -1,3 +1,5 @@
+import type { DictationMode } from '@shared/ipc'
+
 /** How a session ended. Only `pasted` means text was sent to the destination. */
 export type SessionOutcome =
   'pasted' | 'cancelled' | 'targetChanged' | 'secureField' | 'pasteFailed' | 'noSpeech' | 'failed'
@@ -17,6 +19,37 @@ export interface RecoveryEntry {
   cleanedText?: string | null
   /** Cleaned mode: why the final text is what it is (`cleaned`, `timeout`, `guard:invented`…). */
   cleanupNote?: string | null
+  /** The app the text was meant for, as the system names it. Absent when it was never read. */
+  appName?: string | null
+  /** The session was ended from outside (sleep, a lost helper) and not by the user. */
+  interrupted?: true
+  /** Refused as a password field on no more evidence than Secure Input being on in its app. */
+  secureInput?: true
+}
+
+/** A session's text at each stage. The stages belong together: they are one attempt's. */
+type TextStages = Pick<
+  RecoveryEntry,
+  'rawText' | 'finalText' | 'rulesText' | 'cleanedText' | 'cleanupNote'
+>
+
+function textStagesOf(entry: RecoveryEntry): TextStages {
+  const { rawText, finalText, rulesText, cleanedText, cleanupNote } = entry
+  return {
+    rawText,
+    finalText,
+    ...(rulesText !== undefined ? { rulesText } : {}),
+    ...(cleanedText !== undefined ? { cleanedText } : {}),
+    ...(cleanupNote !== undefined ? { cleanupNote } : {}),
+  }
+}
+
+/**
+ * The mode a session ran in. Only Cleaned mode leaves a note on how the text was tidied;
+ * a session that left no text left no trace of its mode either, and is given `modeNow`.
+ */
+export function modeOf(entry: RecoveryEntry, modeNow: DictationMode): DictationMode {
+  return entry.cleanupNote ? 'cleaned' : entry.finalText ? 'verbatim' : modeNow
 }
 
 /**
@@ -29,27 +62,37 @@ export interface RecoveryEntry {
 export class RecoveryBuffer {
   private readonly entries: RecoveryEntry[] = []
 
-  constructor(private readonly capacity = 20) {}
+  constructor(
+    private readonly capacity = 20,
+    /** Called with a session's entry whenever it is added or changed. */
+    private readonly onChange: (entry: RecoveryEntry) => void = () => {},
+  ) {}
+
+  clear(): void {
+    this.entries.splice(0)
+  }
 
   /**
    * Adds a session, or replaces the entry of the same session.
    *
    * Undo and Retry run a session again under its id. An attempt that ends with no text
    * (it failed, or was cancelled in turn) says how the session ended, but does not take
-   * away the text an earlier attempt left: that text is still the user's words.
+   * away the text an earlier attempt left: that text is still the user's words. Everything
+   * else is this attempt's: whether it was interrupted, and the app it was meant for.
    */
   record(entry: RecoveryEntry): void {
     const existing = this.entries.findIndex((item) => item.sessionId === entry.sessionId)
     if (existing === -1) {
       this.entries.push(entry)
       if (this.entries.length > this.capacity) this.entries.shift()
+      this.onChange(entry)
       return
     }
     const before = this.entries[existing]
-    this.entries[existing] =
-      !entry.finalText && before?.finalText
-        ? { ...before, endedAt: entry.endedAt, outcome: entry.outcome }
-        : entry
+    const after =
+      !entry.finalText && before?.finalText ? { ...entry, ...textStagesOf(before) } : entry
+    this.entries[existing] = after
+    this.onChange(after)
   }
 
   /**
@@ -61,7 +104,9 @@ export class RecoveryBuffer {
     const existing = this.entries.findIndex((item) => item.sessionId === sessionId)
     const before = this.entries[existing]
     if (!before || before.finalText) return
-    this.entries[existing] = { ...before, ...text }
+    const after = { ...before, ...text }
+    this.entries[existing] = after
+    this.onChange(after)
   }
 
   /** The most recent session that produced text, whatever its outcome. */
