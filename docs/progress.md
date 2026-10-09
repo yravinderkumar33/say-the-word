@@ -2,6 +2,10 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, evening: promo-video taken out of the repository
+
+The owner did not want the `promo-video/` project in the repository; committing it in `6f82625` was a mistake. It is now untracked and listed in `.gitignore`, and the files stay on this Mac. The README's cover and explainer in `docs/media/` stay committed. The folder is still in the history of `6f82625` and `618d7b7`; removing it from there would mean rewriting `main` and force-pushing, which has not been done.
+
 ## 2026-10-09, evening: repository renamed to say-the-word
 
 At the owner's request, the GitHub repository `yravinderkumar33/whisper-flow` was renamed to `yravinderkumar33/say-the-word` (`gh repo rename`). GitHub redirects the old URL, and the local `origin` now points at the new one. The links in the README (the clone command and the folder it creates), the promo video's closing scene source and the suggested post text were updated. The rendered MP4s and `docs/media/say-the-word-demo.mp4` still show the old URL, which redirects; to change that, render them again (`promo-video/README.md`). Dated entries below keep the URL that was current when they were written.
