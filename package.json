@@ -25,7 +25,7 @@
     "test:app": "npm run build && node scripts/test-app.mjs",
     "test:e2e": "npm run build && node scripts/test-e2e.mjs",
     "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run test:helper",
-    "build": "node scripts/check-out-free.mjs && npm run build:helper && electron-vite build && node scripts/check-build.mjs",
+    "build": "node scripts/check-out-free.mjs && npm run build:helper && node scripts/third-party-notices.mjs && electron-vite build && node scripts/check-build.mjs",
     "smoke": "npm run build && node scripts/run-from-out.mjs smoke electron . --smoke",
     "pictures": "npm run build && node scripts/capture-ui.mjs",
     "smoke:dev": "npm run build:helper && node scripts/run-from-out.mjs smoke:dev electron-vite dev -- --smoke",
@@ -38,7 +38,8 @@
     "pipeline": "tsx --tsconfig tsconfig.node.json scripts/pipeline-cli.ts",
     "eval:stt": "tsx --tsconfig tsconfig.node.json scripts/eval-stt.ts",
     "eval:cleanup": "tsx --tsconfig tsconfig.node.json scripts/eval-cleanup.ts",
-    "pack": "node scripts/check-not-running.mjs && npm run build && node scripts/pack.mjs"
+    "pack": "node scripts/check-not-running.mjs && npm run build && node scripts/pack.mjs",
+    "release": "npm run build && node scripts/release.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

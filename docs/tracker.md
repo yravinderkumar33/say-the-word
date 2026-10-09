@@ -11,6 +11,7 @@ Task status for the plan in [03 Implementation phases](03-implementation-phases.
 - The GitHub repository was renamed to `yravinderkumar33/say-the-word` (the old URL redirects). The macOS bundle IDs, `WHISPER_FLOW_*` switches and existing `~/Library/Application Support/Whisper Flow` data stay compatible with earlier builds. New logs use `~/Library/Logs/Say the Word/main.log`. Historical evidence below retains the names used when it was recorded.
 
 - [x] `npm run check`: 1,185 TypeScript tests, 121 Swift tests, type-checking, lint and formatting. Build assertions and all nine quiet smoke checks passed.
+- [!] Download in the README: `npm run release` is ready and checked. It waits for a Developer ID Application certificate and a `notarytool` profile named `say-the-word` on this Mac.
 - [x] `npm run pack` (later the same day): `dist/mac-arm64/Say the Word Dev.app`, every package check and nine packaged smoke checks passed; bundle id unchanged.
 - [x] The isolated screenshot harness completed all 67 captures in `dist/.pictures-say-the-word`. Inspected About, Welcome and Accessibility: the new name fits without clipping or overlap.
 

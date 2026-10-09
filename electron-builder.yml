@@ -39,6 +39,9 @@ electronFuses:
 extraResources:
   - from: resources/bin
     to: bin
+  # The licence notices of the bundled packages (scripts/third-party-notices.mjs).
+  - from: resources/notices/THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
 
 mac:
   category: public.app-category.productivity

@@ -2,6 +2,16 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, evening: a release build for download
+
+**Decision (owner: "you decide").** The download is a DMG of the release identity (`electron-builder.yml`: bundle id `app.whisperflow.desktop`, every test switch ignored). It is signed with a Developer ID, notarized and stapled, and published as a GitHub Release, never committed. The README's download link will point at `releases/latest/download/Say-the-Word-arm64.dmg`, a name that stays the same from one release to the next. A development-signed build is not offered: on someone else's Mac, Gatekeeper refuses an app signed only with an Apple Development certificate.
+
+**Done.** `npm run release` (`scripts/release.mjs`) refuses before building anything unless a Developer ID Application certificate and a working `notarytool` profile (`say-the-word`) are present. It then builds the DMG, runs the package checks, signs, notarizes and staples the DMG, checks the result with `stapler validate` and `spctl` (as Gatekeeper would), and prints the SHA-256 and the `gh release create` command. The bundled packages' licence notices now ship in every package (`scripts/third-party-notices.mjs` writes `THIRD-PARTY-NOTICES.txt`, and `check-pack.mjs` checks it is there with Electron's and Chromium's). sherpa-onnx's npm packages ship no licence file, so their Apache-2.0 text is appended to the notices.
+
+**Verified.** `npm run check` passed. The release script refused cleanly with no Developer ID on this Mac. Packages of both configurations, built into a scratch folder so the running `Say the Word Dev.app` was left alone, passed every package check, including the new notices check. The release package passed every smoke check; transcription was skipped because the release build ignores the test recording, which is correct. Its manifest has no development marker.
+
+**Waiting on the owner.** Create a Developer ID Application certificate and a notarization profile; then `npm run release`, publish, and add the README link.
+
 ## 2026-10-09, evening: promo-video taken out of the repository
 
 The owner did not want the `promo-video/` project in the repository; committing it in `6f82625` was a mistake. It is now untracked and listed in `.gitignore`, and the files stay on this Mac. The README's cover and explainer in `docs/media/` stay committed. The folder is still in the history of `6f82625` and `618d7b7`; removing it from there would mean rewriting `main` and force-pushing, which has not been done.

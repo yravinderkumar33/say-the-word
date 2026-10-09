@@ -97,6 +97,13 @@ if (!existsSync(ownIcon)) {
 } else if (digest(bundledIcon) !== digest(ownIcon)) {
   failures.push(`the bundle's icon (${iconFile}) is not build/icon.icns: it carries another one`)
 } else console.log(`  ok  the app's own icon is bundled (${iconFile})`)
+// The licences of what the app bundles ask for their notices to travel with it.
+const notices = ['THIRD-PARTY-NOTICES.txt', 'LICENSE.electron.txt', 'LICENSES.chromium.html']
+const missingNotices = notices.filter(
+  (name) => !existsSync(join(appPath, 'Contents', 'Resources', name)),
+)
+if (missingNotices.length === 0) console.log('  ok  licence notices bundled')
+else failures.push(`licence notices missing: ${missingNotices.join(', ')}`)
 if (plistValue('LSUIElement') === 'true') console.log('  ok  starts without a Dock icon')
 else failures.push('LSUIElement is not set: a Dock icon would flash up at every launch')
 
