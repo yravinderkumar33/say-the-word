@@ -1,6 +1,6 @@
 <div align="center">
 
-[![Say the Word: private dictation for Mac. Watch the 36-second video](docs/media/say-the-word-cover.png)](docs/media/say-the-word-demo.mp4)
+[![Hold Fn, say "Let's move the meeting to Friday at 3", let go: the sentence appears in the message. Click for the full 36-second video](docs/media/say-the-word-demo.gif)](docs/media/say-the-word-demo.mp4)
 
 # Say the Word
 

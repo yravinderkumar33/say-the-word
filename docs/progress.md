@@ -2,6 +2,10 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, night: an animated demo at the top of the README
+
+GitHub does not play a video stored in the repository inside a README: a `<video>` tag is kept only for a `user-attachments` URL, which only the web editor can create. So the README now opens with `docs/media/say-the-word-demo.gif` (948 KB, 1200 px, 20 fps, 8.2 s, looping). It is the explainer's hold, speak, release scene (4.9 to 13.1 s), made with ffmpeg using a generated palette, and it links to the full MP4. The still cover image stays in `docs/media/`, but the README no longer uses it.
+
 ## 2026-10-09, night: README audited for promotion
 
 **What was done.** The owner installed the DMG on a fresh profile; it worked. The owner then asked for the README to be audited for promotion on several platforms. It was rewritten for visitors first. The video cover is now the hero image, followed by the Download button and a release badge. Then: why the app exists, features with screenshots, privacy, install, a FAQ (cost, Intel, languages, the two common problems), how it works, and, condensed, building from source, roadmap, contributing, acknowledgements and licence.
