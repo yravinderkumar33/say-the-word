@@ -1,5 +1,6 @@
 import { BrowserWindow, app, nativeTheme } from 'electron'
 import { IPC, type HubPage } from '@shared/ipc'
+import { PRODUCT_NAME } from '@shared/product'
 import { preloadPath } from '../paths'
 import { loadRenderer } from './load-renderer'
 
@@ -54,7 +55,7 @@ export function createHubWindow(): BrowserWindow {
     minWidth: 720,
     minHeight: 480,
     show: false,
-    title: 'Whisper Flow',
+    title: PRODUCT_NAME,
     // The window's own sidebar runs to the top, with the close, minimise and zoom
     // buttons over it. The page marks which parts of its top edge drag the window.
     titleBarStyle: 'hiddenInset',

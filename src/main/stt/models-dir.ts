@@ -1,5 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { LEGACY_DATA_NAME } from '@shared/product'
 import { DEFAULT_MODEL, type ModelSpec } from './model-catalog'
 
 /**
@@ -12,7 +13,7 @@ import { DEFAULT_MODEL, type ModelSpec } from './model-catalog'
 export function modelsRoot(): string {
   const override = process.env['WHISPER_FLOW_MODELS_DIR']
   if (override) return override
-  return join(homedir(), 'Library', 'Application Support', 'Whisper Flow', 'models')
+  return join(homedir(), 'Library', 'Application Support', LEGACY_DATA_NAME, 'models')
 }
 
 /**

@@ -104,7 +104,7 @@ const app = spawn(electronPath, [root, '--hidden'], {
     WHISPER_FLOW_FAKE_MIC: `${microphone}%noloop`,
     // Pastes are counted once `quiet-paste` is sent. Were it ever not to take effect, a
     // paste would go to the helper, and this refuses it: no app has this bundle id.
-    WHISPER_FLOW_PASTE_ONLY_INTO: 'test.whisper-flow.nowhere',
+    WHISPER_FLOW_PASTE_ONLY_INTO: 'test.say-the-word.nowhere',
   },
 })
 app.stdout.on('data', (chunk) => (log += chunk))
@@ -482,7 +482,7 @@ try {
   await picture('hub', 'settings-dark-first-screen', '900x720')
 
   // --- About ---
-  await page('about', 'Whisper Flow')
+  await page('about', 'Say the Word')
   await both('about')
 
   // --- The first run, step by step ---

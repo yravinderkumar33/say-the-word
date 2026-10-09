@@ -120,17 +120,21 @@ describe('another app that would act on the keys a test posts', () => {
     expect(dictationAppIn(listing(wispr), ELECTRON)).toBe('Wispr Flow')
   })
 
-  it('finds Whisper Flow in any build, started in any way', () => {
-    const packaged =
-      '/Users/me/whisper-flow/dist/mac-arm64/Whisper Flow Dev.app/Contents/MacOS/Whisper Flow Dev'
-    expect(dictationAppIn(listing(packaged), ELECTRON)).toBe('Whisper Flow Dev')
-    const hidden = '/Applications/Whisper Flow.app/Contents/MacOS/Whisper Flow --hidden'
-    expect(dictationAppIn(listing(hidden), ELECTRON)).toBe('Whisper Flow')
-  })
+  it.each(['Say the Word', 'Whisper Flow'])(
+    'finds %s in both current and legacy builds, started in any way',
+    (name) => {
+      const packaged = `/Users/me/whisper-flow/dist/mac-arm64/${name} Dev.app/Contents/MacOS/${name} Dev`
+      expect(dictationAppIn(listing(packaged), ELECTRON)).toBe(`${name} Dev`)
+      const hidden = `/Applications/${name}.app/Contents/MacOS/${name} --hidden`
+      expect(dictationAppIn(listing(hidden), ELECTRON)).toBe(name)
+    },
+  )
 
   it('takes no helper process for its app', () => {
     const helpers = [
       '/Applications/Whisper Flow.app/Contents/Resources/bin/flow-helper',
+      '/Applications/Say the Word.app/Contents/Resources/bin/flow-helper',
+      '/Applications/Say the Word Dev.app/Contents/Frameworks/Say the Word Dev Helper (GPU).app/Contents/MacOS/Say the Word Dev Helper (GPU) --type=gpu-process',
       '/Applications/Wispr Flow.app/Contents/Frameworks/Wispr Flow Helper (GPU).app/Contents/MacOS/Wispr Flow Helper (GPU) --type=gpu-process',
       '/Users/me/whisper-flow/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper (Renderer).app/Contents/MacOS/Electron Helper (Renderer) --type=renderer',
     ]
@@ -139,10 +143,10 @@ describe('another app that would act on the keys a test posts', () => {
 
   it('finds this project run from source, as npm run dev runs it, and says how it was started', () => {
     expect(dictationAppIn(listing(`${ELECTRON} .`), ELECTRON)).toBe(
-      'Whisper Flow run from source (electron .)',
+      'Say the Word run from source (electron .)',
     )
     expect(dictationAppIn(listing(ELECTRON), ELECTRON)).toBe(
-      'Whisper Flow run from source (electron)',
+      'Say the Word run from source (electron)',
     )
   })
 
@@ -150,6 +154,6 @@ describe('another app that would act on the keys a test posts', () => {
     const quiet = `${ELECTRON} /Users/me/whisper-flow --hidden`
     expect(dictationAppIn(listing(quiet), ELECTRON)).toBeNull()
     const lookalike = `${ELECTRON} . --hidden-window`
-    expect(dictationAppIn(listing(lookalike), ELECTRON)).toMatch(/^Whisper Flow run from source/)
+    expect(dictationAppIn(listing(lookalike), ELECTRON)).toMatch(/^Say the Word run from source/)
   })
 })

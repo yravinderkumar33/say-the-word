@@ -2,12 +2,12 @@
 # Accessibility and Microphone grants separately from a release install.
 extends: ./electron-builder.yml
 appId: app.whisperflow.desktop.dev
-productName: Whisper Flow Dev
+productName: Say the Word Dev
 
 # Marks this as the build made for development: only it, and a run from the source
 # tree, act on the test switches (see src/shared/test-switches.ts).
 extraMetadata:
-  whisperFlowDevBuild: true
+  sayTheWordDevBuild: true
 
 mac:
   # No trip to Apple's timestamp server for each of the bundle's signed files: it made

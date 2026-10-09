@@ -338,9 +338,9 @@ async function waitForTarget(helper, accept, what, timeoutMs = 10_000) {
 const CHROMIUM_LAB = `
 const { app, BrowserWindow } = require('electron')
 app.whenReady().then(async () => {
-  const win = new BrowserWindow({ width: 520, height: 260, title: 'Whisper Flow paste lab' })
+  const win = new BrowserWindow({ width: 520, height: 260, title: 'Say the Word paste lab' })
   await win.loadURL('data:text/html,' + encodeURIComponent(
-    '<body style="margin:12px;font:14px system-ui">Whisper Flow paste lab<br>' +
+    '<body style="margin:12px;font:14px system-ui">Say the Word paste lab<br>' +
     '<textarea id="t" autofocus style="width:95%;height:120px"></textarea><br>' +
     '<input id="p" type="password" placeholder="password"></body>'))
   app.focus({ steal: true })
@@ -444,7 +444,7 @@ try {
 
   console.log('Paste:')
   {
-    const text = `whisper-flow paste test ${Date.now().toString(36)}`
+    const text = `say-the-word paste test ${Date.now().toString(36)}`
     let textEditTarget = null
 
     await check('pastes into the focused TextEdit document', async () => {
@@ -694,7 +694,7 @@ try {
         '-e',
         'activate',
         '-e',
-        'display dialog "Whisper Flow test: password field" default answer "" with hidden answer giving up after 20',
+        'display dialog "Say the Word test: password field" default answer "" with hidden answer giving up after 20',
       ],
       { stdio: 'ignore' },
     )
@@ -832,7 +832,7 @@ try {
         await waitForFrontApp(helper, TERMINAL)
         await sleep(1_200)
         const target = await captureIn(helper, TERMINAL)
-        const text = `whisper-flow-terminal-test-${Date.now().toString(36)}`
+        const text = `say-the-word-terminal-test-${Date.now().toString(36)}`
         const { outcome } = await helper.paste({
           pasteId: 40,
           text,

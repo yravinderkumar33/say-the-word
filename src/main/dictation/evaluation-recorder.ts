@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { LEGACY_DATA_NAME } from '@shared/product'
 
 /**
  * Where evaluation recordings go. Like the speech models, the folder is shared by
@@ -10,7 +11,7 @@ import { join } from 'node:path'
 export function evaluationDir(): string {
   const override = process.env['WHISPER_FLOW_EVAL_DIR']
   if (override) return override
-  return join(homedir(), 'Library', 'Application Support', 'Whisper Flow', 'evaluation')
+  return join(homedir(), 'Library', 'Application Support', LEGACY_DATA_NAME, 'evaluation')
 }
 
 const KEPT_NAMES = 64

@@ -1,11 +1,11 @@
 {
-  "name": "whisper-flow",
-  "productName": "Whisper Flow",
+  "name": "say-the-word",
+  "productName": "Say the Word",
   "version": "0.0.1",
   "description": "Local-first dictation for macOS: hold a key, speak, and the text lands where you were typing.",
   "private": true,
   "license": "MIT",
-  "author": "Whisper Flow contributors",
+  "author": "Say the Word contributors",
   "main": "./out/main/index.js",
   "engines": {
     "node": "^22.13.0 || >=24.0.0"

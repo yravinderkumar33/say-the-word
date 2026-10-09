@@ -43,11 +43,13 @@ run(process.execPath, [join(root, 'scripts', 'check-pack.mjs'), staged])
 run(process.execPath, [join(root, 'scripts', 'check-not-running.mjs')])
 
 mkdirSync(final, { recursive: true })
-for (const name of readdirSync(staged)) {
+const artifacts = readdirSync(staged)
+for (const name of artifacts) {
   rmSync(join(final, name), { recursive: true, force: true })
   renameSync(join(staged, name), join(final, name))
 }
 rmSync(staging, { recursive: true, force: true })
-const app = readdirSync(final).find((name) => name.endsWith('.app'))
+// Report the bundle just built, even when an older, differently named bundle remains.
+const app = artifacts.find((name) => name.endsWith('.app'))
 console.log(`In place: ${join(final, app ?? '')}`)
 if (!app || !existsSync(join(final, app))) process.exit(1)

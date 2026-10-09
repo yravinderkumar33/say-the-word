@@ -1,6 +1,8 @@
-# Whisper Flow
+# Say the Word
 
 Local-first dictation app for macOS: Electron + TypeScript, one Swift helper, a local speech recognizer, optional Ollama cleanup. The design and plan are in `docs/`.
+
+The public name is Say the Word. Existing bundle IDs, `WHISPER_FLOW_*` test switches and the `Whisper Flow` Application Support folder remain stable for compatibility with existing installs; they are not display names. The repository URL and checkout folder also retain their original name.
 
 ## Before starting work
 
@@ -37,7 +39,7 @@ Local-first dictation app for macOS: Electron + TypeScript, one Swift helper, a 
 
 ## Things that are easy to get wrong
 
-- **Permissions in development.** Under `npm run dev`, macOS attributes Accessibility and Microphone to the terminal that started it. Test permission behaviour on the packaged build, launched with `open -n "dist/mac-arm64/Whisper Flow Dev.app"`.
+- **Permissions in development.** Under `npm run dev`, macOS attributes Accessibility and Microphone to the terminal that started it. Test permission behaviour on the packaged build, launched with `open -n "dist/mac-arm64/Say the Word Dev.app"`.
 - **Preloads are sandboxed** and must stay self-contained; `scripts/check-build.mjs` enforces this.
 - **The capture worklet** must be imported with `?worker&url`; a plain `?url` import ships raw TypeScript.
 - **electron-vite 5 predates Electron 44.** Build targets are set explicitly in `electron.vite.config.ts`, which also carries a shim for a crash when output is not a terminal.
@@ -45,12 +47,12 @@ Local-first dictation app for macOS: Electron + TypeScript, one Swift helper, a 
 - **Quit Wispr Flow before testing shortcuts**; two apps tapping `Fn` will fight.
 - **Someone may be using the Mac while tests run.** Four things have gone wrong this way. On 2026-10-03: a focus-taking test may have pasted test text into another app; a test app with the key tap active swallowed the user's own `Fn` presses; and an Electron app started from the terminal came to the front and took keyboard focus. On 2026-10-04 the keyboard tests ran four times over a FaceTime call: they had waited for a quiet keyboard, and someone on a call touches nothing. The rules that came out of it:
   - Prefer `npm run test:app`. It runs the app with `WHISPER_FLOW_QUIET=1` (no key tap, never comes to the front) and drives it through the debug control line.
-  - `test:helper:integration` and `test:e2e` post system-wide key events and take focus. Run them sparingly, with `-- --when-idle 120`, and say so when you do. They refuse to start during a call, a video or a recording and stop when an app they did not open comes to the front (`scripts/lib/mac-in-use.mjs`); do not pass `--even-if-in-use` unless the person at the Mac asks for it. They also refuse, with no switch to override it, while another app listens to the dictation key: Wispr Flow, any Whisper Flow build (the packaged one in use included), or a from-source instance started without `--hidden`. Any new test of this kind must use the same guard, set `WHISPER_FLOW_PASTE_ONLY_INTO`, and confirm its own app is frontmost before every key press and before every window it brings forward.
+  - `test:helper:integration` and `test:e2e` post system-wide key events and take focus. Run them sparingly, with `-- --when-idle 120`, and say so when you do. They refuse to start during a call, a video or a recording and stop when an app they did not open comes to the front (`scripts/lib/mac-in-use.mjs`); do not pass `--even-if-in-use` unless the person at the Mac asks for it. They also refuse, with no switch to override it, while another app listens to the dictation key: Wispr Flow, any Say the Word build (the packaged one in use included), or a from-source instance started without `--hidden`. Any new test of this kind must use the same guard, set `WHISPER_FLOW_PASTE_ONLY_INTO`, and confirm its own app is frontmost before every key press and before every window it brings forward.
   - When a keyboard test fails, find out which app was in front before suspecting the code: `/usr/bin/log show --info --start "…" --predicate 'process == "launchservicesd" AND eventMessage CONTAINS "SETFRONT"'` lists every change of the front app (`log` alone is a zsh builtin).
   - The switches are listed in `docs/04-implementation-reference.md` under "Test tools and safeguards".
 - **macOS answers some permission questions once per process.** `CGPreflightPostEventAccess` asks the first time and repeats that answer for good. The helper once asked before Accessibility was granted, and then refused every paste for as long as it lived (2026-10-03). Decide on `AXIsProcessTrusted`, which follows the setting, and never on the preflight alone. The app also replaces the helper with a fresh process when the grant arrives while it is running.
 - **A run that starts with permissions already granted says nothing about a first launch.** The order "start, then grant" is its own case. `test:e2e` imitates it (`FLOW_HELPER_GRANT_AFTER_MS`); only a person can do the real thing.
-- **When a dictation misbehaves, read the log before guessing:** `~/Library/Logs/Whisper Flow/main.log` (tray → Show Log). It has the shortcut events, the states, the app the text was meant for, and the reason for any refused paste. How to read macOS's own log when there is none is in `docs/04-implementation-reference.md`, under "Finding out what happened to a dictation".
+- **When a dictation misbehaves, read the log before guessing:** `~/Library/Logs/Say the Word/main.log` (tray → Show Log). It has the shortcut events, the states, the app the text was meant for, and the reason for any refused paste. How to read macOS's own log when there is none is in `docs/04-implementation-reference.md`, under "Finding out what happened to a dictation".
 - **Key events posted by a program need a keyboard's pace.** Six events inside 3 ms from a process that exits at once lost their last event now and then, and a lost key-up leaves everything believing the key is held. The test tool spaces events and waits before exiting; keep that in any new one.
 - **A Mac left alone goes dark, and that ends a dictation.** When the display turns off (which locks the screen) or the Mac goes to sleep, the app interrupts the session in progress, as designed. A long test run that spans either loses the scenario that was running: on 2026-10-04 one failed at the minute the display went off and another across an idle sleep. `test:app` now keeps the Mac awake while it runs (`caffeinate`), and says so when a failure coincides with such an interruption. `pmset -g log` has the times.
 - **Never compare `URL.origin` for `app://` pages.** It is the string `"null"` for that scheme. Use `isOwnPageUrl` (`src/main/app-url.ts`).

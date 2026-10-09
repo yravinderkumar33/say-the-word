@@ -16,6 +16,14 @@ export interface BuildKind {
   devBuild: boolean
 }
 
+/** The new marker and older development packages both require an explicit boolean. */
+export function isDevelopmentManifest(manifest: unknown): boolean {
+  if (typeof manifest !== 'object' || manifest === null) return false
+  const fields = manifest as Record<string, unknown>
+  return fields['sayTheWordDevBuild'] === true || fields['whisperFlowDevBuild'] === true
+}
+
+// These names are a tooling interface, retained across the public product rename.
 const PREFIXES = ['WHISPER_FLOW_', 'FLOW_HELPER_']
 const NAMES = new Set(['ELECTRON_RENDERER_URL'])
 

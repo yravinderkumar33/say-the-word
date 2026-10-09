@@ -48,7 +48,7 @@ describe('what a change of "Keep" asks', () => {
       message: 'Keep dictations only until you quit?',
       detail:
         'The dictations saved on disk are deleted now. The list stays as it is until ' +
-        'Whisper Flow quits, and nothing more is written to disk.',
+        'Say the Word quits, and nothing more is written to disk.',
       confirm: 'Stop Saving to Disk',
     })
   })
@@ -57,7 +57,7 @@ describe('what a change of "Keep" asks', () => {
     // A database that cannot be read (damaged, or written by a newer build) is on disk too.
     expect(keepQuestion('session', nothing, 2, 1).detail).toBe(
       'The dictations saved on disk are deleted now, including the file of dictations saved ' +
-        'earlier that the list does not show. The list stays as it is until Whisper Flow ' +
+        'earlier that the list does not show. The list stays as it is until Say the Word ' +
         'quits, and nothing more is written to disk.',
     )
     expect(keepQuestion('session', nothing, 0, 3).detail).toContain(

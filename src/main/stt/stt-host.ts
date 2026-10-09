@@ -1,6 +1,7 @@
 import { MessageChannelMain, utilityProcess, type UtilityProcess, type WebContents } from 'electron'
 import { EventEmitter } from 'node:events'
 import { IPC } from '@shared/ipc'
+import { PRODUCT_NAME } from '@shared/product'
 import type { TranscriptEvent, WorkerControl, WorkerEvent } from '@shared/stt-protocol'
 import workerPath from './stt-worker?modulePath'
 
@@ -67,7 +68,7 @@ export class SttHost extends EventEmitter<SttHostEvents> {
   start(timeoutMs = 10_000): Promise<void> {
     if (this.child && this.whenReady) return this.whenReady
     const child = utilityProcess.fork(workerPath, [], {
-      serviceName: 'Whisper Flow Speech',
+      serviceName: `${PRODUCT_NAME} Speech`,
       stdio: 'pipe',
     })
     this.child = child

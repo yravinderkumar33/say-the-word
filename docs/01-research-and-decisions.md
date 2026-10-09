@@ -1,6 +1,6 @@
 # Research and decisions
 
-Whisper Flow (working title) is an open-source, local-first clone of the dictation app Wispr Flow: hold a key, speak, and polished text lands in whatever app is focused. Everything runs on the user's machine, with Ollama as the LLM. Existing Wispr Flow users should be able to switch without relearning anything: same shortcuts, same hold and hands-free interaction, same on-screen pill.
+Say the Word is an open-source, local-first clone of the dictation app Wispr Flow: hold a key, speak, and polished text lands in whatever app is focused. Everything runs on the user's machine, with Ollama as the LLM. Existing Wispr Flow users should be able to switch without relearning anything: same shortcuts, same hold and hands-free interaction, same on-screen pill.
 
 **Status:** design drafted and revised after one review; implementation under way. Feasibility is unproven until the Phase 1–2 gates pass. Current state is in the [tracker](tracker.md).
 
@@ -72,7 +72,7 @@ Taken on the development machine: Apple M4, 16 GB, macOS 26.6, Ollama 0.35.0, te
 
 None of these block development.
 
-1. **Name and branding.** "Wispr Flow" is a trademark and "Whisper Flow" sounds identical. The repo keeps the folder name as a working title, with the product name and bundle id in one place. Pick a distinct public name in Phase 8. All sounds and icons are original; nothing is copied from Wispr Flow.
+1. **Name and branding.** The public product name is **Say the Word**, chosen by the owner on 2026-10-09. The repository remains `whisper-flow`; existing user-data paths, bundle IDs and environment switches retain their original values for compatibility. The visible product name is defined in `src/shared/product.ts`. All sounds and icons are original; nothing is copied from Wispr Flow.
 2. **Licence audit of the shipped binaries.** List every binary the release contains (Electron, the speech addon and its libraries, ONNX Runtime, the helper), its licence, and what that licence obliges. For the GPL component the options are: upgrade to sherpa-onnx 2.0 once it drops `espeak-ng`, make `transcribe-cpp` the default engine, or accept and document the obligation.
 3. **Licence.** MIT assumed, matching OpenWhispr, Amical and Handy.
 4. **Update checks.** The network policy allows only traffic the user starts. The release therefore ships a manual "Check for updates", with automatic checks as an opt-in setting.

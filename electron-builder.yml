@@ -1,8 +1,9 @@
 # Release identity. Local builds use electron-builder.dev.yml, which overrides the
 # id and name so that development permissions never mix with a release install.
+# Keep the existing bundle id across the rename so macOS recognizes the same app.
 appId: app.whisperflow.desktop
-productName: Whisper Flow
-copyright: Copyright © 2026 Whisper Flow contributors
+productName: Say the Word
+copyright: Copyright © 2026 Say the Word contributors
 
 directories:
   buildResources: build
@@ -54,4 +55,4 @@ mac:
     # A menu-bar app: it starts with no Dock icon, so none flashes up at launch or at
     # login. "Show in Dock" in Settings turns the icon on (see applyDock in src/main/index.ts).
     LSUIElement: true
-    NSMicrophoneUsageDescription: Whisper Flow listens only while you are dictating, which is while you hold the dictation key or until you stop a hands-free dictation. Audio stays on this Mac.
+    NSMicrophoneUsageDescription: Say the Word listens only while you are dictating, which is while you hold the dictation key or until you stop a hands-free dictation. Audio stays on this Mac.

@@ -84,10 +84,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const packagedBinary = join(
   packageDir,
-  'Whisper Flow Dev.app',
+  'Say the Word Dev.app',
   'Contents',
   'MacOS',
-  'Whisper Flow Dev',
+  'Say the Word Dev',
 )
 
 /** The synthetic voice is transcribed word for word; this leaves room for one slip. */
@@ -199,7 +199,7 @@ function launch(extraEnv = {}) {
       WHISPER_FLOW_EVAL_DIR: evaluationDir,
       // Pastes are counted once `quiet-paste` is sent. Were it ever not to take effect, a
       // paste would go to the helper, and this refuses it: no app has this bundle id.
-      WHISPER_FLOW_PASTE_ONLY_INTO: 'test.whisper-flow.nowhere',
+      WHISPER_FLOW_PASTE_ONLY_INTO: 'test.say-the-word.nowhere',
       ...(realMicRuns > 0 ? {} : { WHISPER_FLOW_FAKE_MIC: `${microphoneFile}%noloop` }),
       ...extraEnv,
     },

@@ -152,18 +152,18 @@ describe('the days of the list', () => {
 
 describe('where the list lives', () => {
   it('says that it is in memory and gone on quit, by default', () => {
-    expect(keepNotice('session', 'Whisper Flow')).toEqual({
+    expect(keepNotice('session', 'Say the Word')).toEqual({
       lead: 'Held in memory only.',
-      rest: 'This list is gone when Whisper Flow quits. Nothing is written to disk.',
+      rest: 'This list is gone when Say the Word quits. Nothing is written to disk.',
     })
   })
 
   it('says that it is on disk, for how long, and that it goes nowhere', () => {
-    expect(keepNotice('week', 'Whisper Flow')).toEqual({
+    expect(keepNotice('week', 'Say the Word')).toEqual({
       lead: 'Saved on this Mac for 7 days.',
       rest: 'Each dictation is written to disk and deleted after 7 days. Never sent anywhere.',
     })
-    expect(keepNotice('forever', 'Whisper Flow').lead).toBe(
+    expect(keepNotice('forever', 'Say the Word').lead).toBe(
       'Saved on this Mac until you delete it.',
     )
   })

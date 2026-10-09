@@ -4,6 +4,16 @@ Task status for the plan in [03 Implementation phases](03-implementation-phases.
 
 **Legend:** `[ ]` not started · `[~]` in progress · `[x]` done and verified · `[!]` waiting on a person
 
+## Product identity and explainer — 2026-10-09
+
+- The owner chose **Say the Word** as the public product name. Current interface copy and builds use it; local packages are named `Say the Word Dev.app`.
+- The README links the 36-second explainer through a clickable cover and a direct video link. The media lives in `docs/media`.
+- The repository URL, macOS bundle IDs, `WHISPER_FLOW_*` switches and existing `~/Library/Application Support/Whisper Flow` data stay compatible with earlier builds. New logs use `~/Library/Logs/Say the Word/main.log`. Historical evidence below retains the names used when it was recorded.
+
+- [x] `npm run check`: 1,185 TypeScript tests, 121 Swift tests, type-checking, lint and formatting. Build assertions and all nine quiet smoke checks passed.
+- [x] `npm run pack` (later the same day): `dist/mac-arm64/Say the Word Dev.app`, every package check and nine packaged smoke checks passed; bundle id unchanged.
+- [x] The isolated screenshot harness completed all 67 captures in `dist/.pictures-say-the-word`. Inspected About, Welcome and Accessibility: the new name fits without clipping or overlap.
+
 ## Review of the whole codebase before submission — 2026-10-05, night
 
 - [x] Dead code, unused exports and dependencies (`knip`, each entry checked by hand), and a read of every area by eight reviewers: about 135 findings, each shown to hold before it was changed. The progress log has them, worst first.
@@ -271,7 +281,7 @@ Results go in `docs/benchmarks.md`; this table shows the outcome.
 
 None of these blocks the next phase. The first three are what stands between the build and daily use.
 
-1. **Use it.** The package in `dist/mac-arm64` was rebuilt late on 2026-10-04 (23:55) with every screen of the design and every fix up to then. It was not started: it was not running at the time (it had been quit at 20:58), and it would put a second key tap on `Fn` beside Wispr Flow's. Quit Wispr Flow, then `open -n "dist/mac-arm64/Whisper Flow Dev.app"`. Two things are different from the build before: it has no Dock icon unless Settings › General › Show in Dock is switched on (it lives in the menu bar; the window opens from the menu-bar icon), and the window opens on Home, not on the first run, because this Mac has settings already. Settings › Advanced › Setup guide › Show Again shows the first run. Hold `Fn` in a text field, speak, let go. If a dictation does not arrive, note what the pill said; the log (menu-bar icon → Show Log) has the rest, and it never contains what you said.
+1. **Use it.** The package in `dist/mac-arm64` was rebuilt late on 2026-10-04 (23:55) with every screen of the design and every fix up to then. It was not started: it was not running at the time (it had been quit at 20:58), and it would put a second key tap on `Fn` beside Wispr Flow's. For a new build after the rename, quit Wispr Flow, then `open -n "dist/mac-arm64/Say the Word Dev.app"`. Two things are different from the build before: it has no Dock icon unless Settings › General › Show in Dock is switched on (it lives in the menu bar; the window opens from the menu-bar icon), and the window opens on Home, not on the first run, because this Mac has settings already. Settings › Advanced › Setup guide › Show Again shows the first run. Hold `Fn` in a text field, speak, let go. If a dictation does not arrive, note what the pill said; the log (menu-bar icon → Show Log) has the rest, and it never contains what you said.
 2. **Quit Wispr Flow, then try the physical `Fn` key's other gestures:** tap it once and twice quickly (note whether the emoji picker opens or Apple Dictation starts), and try `Fn`+arrow keys. If a tap triggers any system action, say so: the fallback is ready to be switched on.
 3. **Dictate in the apps you use** (Slack, Chrome, VS Code, Terminal) and note anything that feels wrong: a clipped first word, text landing in the wrong place, a paste refused when it should not have been, "No speech heard" when you did speak.
 4. **Two hardware checks:** unplug or switch off a microphone mid-recording, and close the lid mid-recording. Nothing should be pasted in the second case, and no key should be stuck afterwards.

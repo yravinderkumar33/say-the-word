@@ -1,7 +1,11 @@
 import { app } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { debuggingSwitchesToRefuse, switchesToIgnore } from '@shared/test-switches'
+import {
+  debuggingSwitchesToRefuse,
+  isDevelopmentManifest,
+  switchesToIgnore,
+} from '@shared/test-switches'
 import { LogFile } from './log-file'
 
 // Imported before everything else in `index.ts`, for its effect: in a release build the
@@ -13,11 +17,7 @@ function isDevBuild(): boolean {
     const manifest = JSON.parse(
       readFileSync(join(app.getAppPath(), 'package.json'), 'utf8'),
     ) as unknown
-    return (
-      typeof manifest === 'object' &&
-      manifest !== null &&
-      (manifest as Record<string, unknown>)['whisperFlowDevBuild'] === true
-    )
+    return isDevelopmentManifest(manifest)
   } catch {
     return false
   }

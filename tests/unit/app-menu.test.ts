@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 const menu = vi.hoisted(() => ({ template: [] as MenuItemConstructorOptions[] }))
 vi.mock('electron', () => ({
-  app: { getName: () => 'Whisper Flow', isPackaged: true },
+  app: { getName: () => 'Say the Word', isPackaged: true },
   Menu: {
     buildFromTemplate: (template: MenuItemConstructorOptions[]) => template,
     setApplicationMenu: (template: MenuItemConstructorOptions[]) => (menu.template = template),

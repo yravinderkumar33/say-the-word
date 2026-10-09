@@ -24,7 +24,7 @@ describe('the status line of Home', () => {
       ready: false,
       title: 'Waiting for the Accessibility permission',
       detail:
-        'Lets Whisper Flow notice the Fn key and paste into the app you are using. ' +
+        'Lets Say the Word notice the Fn key and paste into the app you are using. ' +
         'It sees shortcut keys only, never what you type.',
       action: { does: 'accessibility', label: 'Open System Settings' },
       needsUser: true,

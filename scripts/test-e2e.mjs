@@ -56,10 +56,10 @@ const packagedBinary = join(
   root,
   'dist',
   'mac-arm64',
-  'Whisper Flow Dev.app',
+  'Say the Word Dev.app',
   'Contents',
   'MacOS',
-  'Whisper Flow Dev',
+  'Say the Word Dev',
 )
 const toolEnv = { ...process.env, FLOW_HELPER_TEST_TOOLS: '1' }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

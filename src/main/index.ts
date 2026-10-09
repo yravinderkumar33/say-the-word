@@ -17,6 +17,7 @@ import { dictationKeyLabel } from '@shared/keycodes'
 import { handleAppProtocol, registerAppScheme } from './app-protocol'
 import { findOllama, isInstalled, startOllama } from './cleanup/ollama-app'
 import { startDebugControl } from './debug-control'
+import { userDataPath } from './data-paths'
 import { evaluationDir } from './dictation/evaluation-recorder'
 import { wireDictation } from './dictation/wire-dictation'
 import { historyEntry, historyTimings } from './history/from-session'
@@ -86,9 +87,9 @@ if (fakeMicrophone) {
   app.commandLine.appendSwitch('disable-features', 'AudioServiceSandbox')
 }
 if (process.env['WHISPER_FLOW_MUTE']) app.commandLine.appendSwitch('mute-audio')
-/** Keeps a test's settings away from the real ones. */
+/** Keeps a test's settings away from the real ones. The legacy default preserves existing installs. */
 const userDataDir = process.env['WHISPER_FLOW_USER_DATA_DIR']
-if (userDataDir) app.setPath('userData', userDataDir)
+app.setPath('userData', userDataPath(app.getPath('appData'), userDataDir))
 /**
  * For tests that must not disturb the person using the Mac. The app never listens to
  * the keyboard (the helper creates no key tap, so it cannot see or swallow anyone's

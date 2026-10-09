@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { debuggingSwitchesToRefuse, isTestSwitch, switchesToIgnore } from '@shared/test-switches'
+import {
+  debuggingSwitchesToRefuse,
+  isDevelopmentManifest,
+  isTestSwitch,
+  switchesToIgnore,
+} from '@shared/test-switches'
 
 const environment = [
   'PATH',
@@ -11,6 +16,31 @@ const environment = [
   'FLOW_HELPER_TEST_TOOLS',
   'ELECTRON_RENDERER_URL',
 ]
+
+describe('the development build marker after the product rename', () => {
+  it.each([{ sayTheWordDevBuild: true }, { whisperFlowDevBuild: true }])(
+    'honours an explicitly marked development package: %j',
+    (manifest) => {
+      const build = { packaged: true, devBuild: isDevelopmentManifest(manifest) }
+      expect(switchesToIgnore(environment, build)).toEqual([])
+      expect(debuggingSwitchesToRefuse(() => true, build)).toEqual([])
+    },
+  )
+
+  it.each([
+    null,
+    'Say the Word Dev',
+    {},
+    { productName: 'Say the Word Dev' },
+    { sayTheWordDevBuild: false },
+    { sayTheWordDevBuild: 'true' },
+    { whisperFlowDevBuild: 'true' },
+  ])('keeps an unmarked or malformed package closed: %j', (manifest) => {
+    const build = { packaged: true, devBuild: isDevelopmentManifest(manifest) }
+    expect(switchesToIgnore(environment, build)).toContain('WHISPER_FLOW_DEBUG_CONTROL')
+    expect(debuggingSwitchesToRefuse(() => true, build)).toContain('remote-debugging-port')
+  })
+})
 
 describe('test switches', () => {
   it('are honoured when running from the source tree', () => {
@@ -40,7 +70,7 @@ describe('test switches', () => {
 })
 
 describe('debugging switches', () => {
-  // As `open -a "Whisper Flow" --args --remote-debugging-port=9222` would start it.
+  // As `open -a "Say the Word" --args --remote-debugging-port=9222` would start it.
   const given =
     (...names: string[]) =>
     (name: string) =>

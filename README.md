@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="docs/qa-2026-10-05/screenshots/pill-04-listening.png" alt="The Whisper Flow pill, listening" width="420" />
+<img src="docs/qa-2026-10-05/screenshots/pill-04-listening.png" alt="The Say the Word pill, listening" width="420" />
 
-# Whisper Flow
+# Say the Word
 
 **Hold a key, speak, and your words land where you were typing. Nothing leaves your Mac.**
 
@@ -16,6 +16,12 @@ Open-source, local-first dictation for macOS. Speech recognition runs on your ma
 
 ---
 
+## See it in action
+
+[![Watch the 36-second Say the Word explainer](docs/media/say-the-word-cover.png)](docs/media/say-the-word-demo.mp4)
+
+[Watch or download the 36-second explainer](docs/media/say-the-word-demo.mp4) — hold a key, speak, and keep your words on your Mac. The video includes music and works with sound off.
+
 ## Why this exists
 
 Voice typing is one of the biggest productivity tools on a computer. For people with RSI, carpal tunnel, dyslexia, limited mobility or chronic pain, it may be the only comfortable way to write. Today the best dictation tools usually work one of two ways:
@@ -23,7 +29,7 @@ Voice typing is one of the biggest productivity tools on a computer. For people 
 - **In the cloud.** Every word you say (emails, medical notes, passwords read aloud, private messages) goes to someone else's server, usually on a subscription.
 - **Built into the OS.** These are private, but you have little control over them, cleanup is limited, and they often lag behind the cloud tools.
 
-Whisper Flow aims for both: the fast hold-to-talk interaction of the best commercial dictation apps, with **every step running on your own Mac**. It is MIT-licensed, so anyone can read the code, check the privacy claims, and adapt it.
+Say the Word aims for both: the fast hold-to-talk interaction of the best commercial dictation apps, with **every step running on your own Mac**. It is MIT-licensed, so anyone can read the code, check the privacy claims, and adapt it.
 
 ### Who it helps
 
@@ -131,7 +137,7 @@ The app asks for two permissions: **Accessibility** (to paste) and **Microphone*
 ```sh
 npm run setup:signing     # once per machine: records your local signing identity
 npm run pack              # signed .app, verified, in dist/
-open -n "dist/mac-arm64/Whisper Flow Dev.app"
+open -n "dist/mac-arm64/Say the Word Dev.app"
 ```
 
 For Cleaned mode, install Ollama and pull a small model (for example `ollama pull qwen3.5:4b`), then pick it on the Cleanup page.
@@ -180,7 +186,7 @@ The test suite has more than 1,100 TypeScript tests and 120 Swift tests. On top 
 
 ## Troubleshooting
 
-When a dictation doesn't arrive, the pill says why in a few words, and the History page explains it in a sentence along with the one thing you can do about it. The details are in the log: menu-bar icon → **Show Log**, or `~/Library/Logs/Whisper Flow/main.log`.
+When a dictation doesn't arrive, the pill says why in a few words, and the History page explains it in a sentence along with the one thing you can do about it. The details are in the log: menu-bar icon → **Show Log**, or `~/Library/Logs/Say the Word/main.log`. Existing settings, history, evaluation recordings and model folders keep their original names so upgrades retain your data and downloads.
 
 **The text is never lost.** Use Copy on the pill, or press `Cmd`+`Ctrl`+`V` to paste the last dictation at your cursor.
 
@@ -188,9 +194,8 @@ When a dictation doesn't arrive, the pill says why in a few words, and the Histo
 
 ## Status and roadmap
 
-Whisper Flow is in **early development**. Dictation works end to end every day on the author's Mac, and the core is heavily tested, but there is no signed, notarized release yet. Before one, it needs:
+Say the Word is in **early development**. Dictation works end to end every day on the author's Mac, and the core is heavily tested, but there is no signed, notarized release yet. Before one, it needs:
 
-- [ ] A final public name (see the note below)
 - [ ] Developer ID signing, notarization and a DMG
 - [ ] Licence notices bundled in the app, and a licence audit of the speech library's prebuilt binary
 - [ ] A manual "Check for updates" that respects the network policy
@@ -212,7 +217,7 @@ Before you open a pull request, run `npm run check` and read the working agreeme
 
 ## Acknowledgements
 
-Whisper Flow builds on excellent open work:
+Say the Word builds on excellent open work:
 
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) and NVIDIA's [Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) for on-device speech recognition
 - [Ollama](https://ollama.com) for local language models
@@ -221,7 +226,7 @@ Whisper Flow builds on excellent open work:
 
 The full list of components and their licences is on the app's About page.
 
-> **Note:** Whisper Flow is an independent open-source project. It is not affiliated with, endorsed by, or connected to Wispr Flow or its makers. "Whisper Flow" is a working title, and a distinct name will be chosen before the first public release. No code, sounds or artwork were copied from any commercial product.
+> **Note:** Say the Word is an independent open-source project. It is not affiliated with, endorsed by, or connected to Wispr Flow or its makers. No code, sounds or artwork were copied from any commercial product.
 
 ## Licence
 

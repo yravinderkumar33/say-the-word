@@ -3,6 +3,7 @@ import { utilityProcess, type UtilityProcess } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as sleep } from 'node:timers/promises'
 import pRetry from 'p-retry'
+import { PRODUCT_NAME } from '@shared/product'
 import type {
   DictationMode,
   HistoryEntry,
@@ -148,7 +149,7 @@ export class StorageHost {
   }
   private async start(): Promise<void> {
     const child = utilityProcess.fork(workerPath, [], {
-      serviceName: 'Whisper Flow Storage',
+      serviceName: `${PRODUCT_NAME} Storage`,
       stdio: 'pipe',
     })
     const rpc = createBirpc<StorageFunctions>(

@@ -151,7 +151,7 @@ describe('the diagnostics', () => {
       paused: false,
     })
 
-    expect(text).toContain('Whisper Flow: 0.0.1 (packaged)')
+    expect(text).toContain('Say the Word: 0.0.1 (packaged)')
     expect(text).toContain('Mac: Apple M4 (arm64), 16 GB')
     expect(text).toContain('Cleanup: Cleaned with qwen3.5:4b')
     expect(text).toContain('Saving every dictation: off')

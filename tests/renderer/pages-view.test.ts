@@ -82,7 +82,7 @@ const cleanup = (change: Partial<CleanupFacts> = {}): CleanupFacts => ({
 
 describe('the Cleanup page', () => {
   it('says where Ollama runs, and offers nothing when it does', () => {
-    expect(ollamaLine(cleanup(), 'Whisper Flow')).toEqual({
+    expect(ollamaLine(cleanup(), 'Say the Word')).toEqual({
       text: 'Running on this Mac, at 127.0.0.1',
       ok: true,
       action: null,
@@ -90,12 +90,12 @@ describe('the Cleanup page', () => {
   })
 
   it('offers to start Ollama when it is installed, and to get it when it is not', () => {
-    expect(ollamaLine(cleanup({ ollama: 'notRunning' }), 'Whisper Flow')).toMatchObject({
+    expect(ollamaLine(cleanup({ ollama: 'notRunning' }), 'Say the Word')).toMatchObject({
       text: 'Installed on this Mac, and not running.',
       action: 'start',
     })
-    expect(ollamaLine(cleanup({ ollama: 'notInstalled' }), 'Whisper Flow')).toEqual({
-      text: 'Not installed. A separate free app that runs the model; Whisper Flow does not include it.',
+    expect(ollamaLine(cleanup({ ollama: 'notInstalled' }), 'Say the Word')).toEqual({
+      text: 'Not installed. A separate free app that runs the model; Say the Word does not include it.',
       ok: false,
       action: 'get',
     })
@@ -104,40 +104,40 @@ describe('the Cleanup page', () => {
   it('does not offer to start anything at an address that is not this Mac', () => {
     const elsewhere = cleanup({ ollama: 'notRunning', host: '192.168.1.20', local: false })
 
-    expect(ollamaLine(elsewhere, 'Whisper Flow')).toMatchObject({ action: null, ok: false })
-    expect(ollamaLine(cleanup({ host: '192.168.1.20', local: false }), 'Whisper Flow').text).toBe(
+    expect(ollamaLine(elsewhere, 'Say the Word')).toMatchObject({ action: null, ok: false })
+    expect(ollamaLine(cleanup({ host: '192.168.1.20', local: false }), 'Say the Word').text).toBe(
       'Running at 192.168.1.20, which is not this Mac',
     )
   })
 
   it('has one row about Ollama for every page, from the moment it is looked for', () => {
-    expect(ollamaRow(null, false, 'Whisper Flow')).toEqual({
+    expect(ollamaRow(null, false, 'Say the Word')).toEqual({
       text: 'Looking for Ollama…',
       icon: null,
       action: null,
     })
-    expect(ollamaRow(cleanup(), false, 'Whisper Flow')).toEqual({
+    expect(ollamaRow(cleanup(), false, 'Say the Word')).toEqual({
       text: 'Running on this Mac, at 127.0.0.1',
       icon: 'tick',
       action: null,
     })
-    expect(ollamaRow(cleanup({ ollama: 'notRunning' }), false, 'Whisper Flow')).toEqual({
+    expect(ollamaRow(cleanup({ ollama: 'notRunning' }), false, 'Say the Word')).toEqual({
       text: 'Installed on this Mac, and not running.',
       icon: 'stopped',
       action: 'start',
     })
     // Being started: said so, and not offered again meanwhile.
-    expect(ollamaRow(cleanup({ ollama: 'notRunning' }), true, 'Whisper Flow')).toEqual({
+    expect(ollamaRow(cleanup({ ollama: 'notRunning' }), true, 'Say the Word')).toEqual({
       text: 'Starting Ollama…',
       icon: 'stopped',
       action: null,
     })
-    expect(ollamaRow(cleanup({ ollama: 'notInstalled' }), false, 'Whisper Flow')).toMatchObject({
+    expect(ollamaRow(cleanup({ ollama: 'notInstalled' }), false, 'Say the Word')).toMatchObject({
       icon: 'absent',
       action: 'get',
     })
     expect(
-      ollamaRow(cleanup({ host: '192.168.1.20', local: false }), false, 'Whisper Flow').text,
+      ollamaRow(cleanup({ host: '192.168.1.20', local: false }), false, 'Say the Word').text,
     ).toBe('Running at 192.168.1.20, which is not this Mac')
   })
 

@@ -8,7 +8,7 @@ What the interface should become, the brief that was given to Claude Design, and
 
 The interface is designed in Claude Design, one round at a time, from the brief below. Round 1 showed three directions; the owner chose **direction A**: a dark pill whose one colour, green, means the microphone is live, and windows that look at home on a Mac.
 
-- **Project:** "Whisper Flow interface design", <https://claude.ai/design/p/9f36730e-333c-4777-af56-b995e0d47467>.
+- **Original project:** "Whisper Flow interface design" (created before the Say the Word rename), <https://claude.ai/design/p/9f36730e-333c-4777-af56-b995e0d47467>.
 - **Files:** `Round 1 Directions.dc.html`; `Round 2 Direction A.dc.html` (the pill, Home, the components, the tokens); `First Run.dc.html`; `Home and History.dc.html`; `Dictionary Cleanup Privacy.dc.html`; `Settings About Apps Snippets.dc.html`; `Icons and Menu.dc.html` (the menu-bar icon's five states, the menu, the app icon); `Accessibility.dc.html` (the review of all of them: contrast, focus order, what VoiceOver says, and the look with Increase Contrast and Reduce Transparency). Each is a page template with a script: the values, the states and the timings are in the script.
 - **The design is the specification.** Sizes, colours and durations are taken from it and named in `src/renderer/tokens.css`. Where the design and the engine disagree, the engine's behaviour is kept and the difference is listed below.
 - **Left out by the owner's decision (2026-10-04): Dictionary, Apps and Snippets.** Neither the screens nor what they would do is built, and the sidebar does not list them. The dictionary a settings file can still hold is applied as before; nothing in the interface edits it.
@@ -125,13 +125,13 @@ Ordered by how much each changes whether someone other than its author can use t
 Paste this into a new Claude Design project, with pictures of the current interface and `src/renderer/styles.css`, `src/renderer/overlay/Pill.tsx` and `src/renderer/hub/App.tsx` attached. It asks for three directions on one static page and stops. Pictures can be made without taking the keyboard or the focus: start the app as `scripts/test-app.mjs` does and use `capture-pill`, `capture-hub` and `capture-tray` on the control line (see "Test tools and safeguards" in the reference).
 
 ```text
-# Whisper Flow: design the interface of a local-first dictation app for macOS
+# Say the Word: design the interface of a local-first dictation app for macOS
 
-"Whisper Flow" is a working title and will change. Keep the name in one place so it can be swapped, and do not build the icon on its letters.
+The public product name is "Say the Word". Keep the name in one place, and do not build the icon on its letters.
 
 ## What I need
 
-Whisper Flow is a macOS menu-bar app: hold a key, speak, and the text is typed into whatever app you are using. The engine underneath is finished and dependable. The interface is a developer's placeholder: a tiny status pill, a one-page setup checklist and a menu-bar menu. Design the real interface: one a new user can set up without help, that explains itself while they dictate, and that makes the app's main promise visible, which is that everything runs on their Mac.
+Say the Word is a macOS menu-bar app: hold a key, speak, and the text is typed into whatever app you are using. The engine underneath is finished and dependable. The interface is a developer's placeholder: a tiny status pill, a one-page setup checklist and a menu-bar menu. Design the real interface: one a new user can set up without help, that explains itself while they dictate, and that makes the app's main promise visible, which is that everything runs on their Mac.
 
 Work in rounds and stop after each one so that I can steer. The round to do now is described at the very end. Everything between here and there is reference for all the rounds.
 
@@ -141,7 +141,7 @@ If pictures or source files of the current app are attached, they are the "befor
 
 - Hold Fn and speak; let go, and the text is pasted where the cursor is. For longer dictation, press Fn twice (or Fn+Space), speak with hands free, and press Fn again to stop. Esc cancels. ⌘⌃V pastes the last dictation again; ⌘⌃C copies it.
 - Two modes. Verbatim keeps every word, with the punctuation and capitals the recognizer gives it. Cleaned is the same words tidied (hesitations, false starts, punctuation) by a model running on this Mac. Cleaned never changes numbers, names, email addresses, links or a "not", and never rephrases or adds anything.
-- The model for Cleaned runs in Ollama, a separate free app that the user installs; Whisper Flow does not include it. "Rules only" is Cleaned without a model: chosen on purpose, or used when Ollama is not running or the model is too slow. It is not a third mode: the mode switch always has two positions.
+- The model for Cleaned runs in Ollama, a separate free app that the user installs; Say the Word does not include it. "Rules only" is Cleaned without a model: chosen on purpose, or used when Ollama is not running or the model is too slow. It is not a third mode: the mode switch always has two positions.
 - Private by construction. Speech is recognized on the Mac. There is no account, no cloud and no telemetry, and what was said is written to disk only if the user chooses to keep a history.
 - Careful about where text lands: only in the place the user was in when they stopped speaking, and never in a password field. When a paste is refused, the text is kept and offered back.
 - Fast. The microphone is live about a tenth of a second after the key goes down, and the text arrives about 0.4 s after it is released (about a second in Cleaned mode, at most about four).
@@ -175,7 +175,7 @@ Who uses it: people who write all day (messages, email, documents, code, prompts
 
 It has six states, listed first. Text waiting, the busy nudge and Command Mode are variants, not states. Sounds accompany some states, but each must be unmistakable with the sound off. A successful dictation has no state of its own: the pill returns to rest as the text appears.
 
-- Resting. Ready, nearly invisible. Once the pointer has rested on it for half a second it grows a little and shows "Hold Fn to dictate · click for hands-free". A click always starts hands-free. A right-click opens a native menu: Paste last dictation, Copy last dictation, Microphone, Mode, Hide the pill for 1 hour (dictation still works), Open Whisper Flow.
+- Resting. Ready, nearly invisible. Once the pointer has rested on it for half a second it grows a little and shows "Hold Fn to dictate · click for hands-free". A click always starts hands-free. A right-click opens a native menu: Paste last dictation, Copy last dictation, Microphone, Mode, Hide the pill for 1 hour (dictation still works), Open Say the Word.
 - Starting. The microphone has been asked for and is not live yet: it is too early to speak. Usually a tenth of a second, so a short Starting must not flash. With a slow microphone it lasts longer, and after about a second words appear: "Waiting for the microphone…" or "Loading the speech model…".
 - Listening. Speak now. Something that moves with the real audio level. If nothing is heard for a few seconds: "No sound from MacBook Pro Microphone" (names vary; shorten long ones in the middle).
 - Listening, hands-free. The same with no key held: elapsed time (0:42), Stop as the main action, Cancel beside it. In the last minute before the 20-minute limit, a countdown.
@@ -199,7 +199,7 @@ One step per screen. Progress shows named steps, not "2 of 7", because two of th
 
 1. Welcome. One sentence on what it does, and the promise: "Everything runs on this Mac."
 2. Microphone. Ask for permission, choose a microphone, show a live level meter, and wait until the app confirms it hears the user. "On only while you dictate, and during this check."
-3. Accessibility. Why it is needed: "Lets Whisper Flow notice the Fn key and paste into the app you are using. It sees shortcut keys only, never what you type." A simplified drawing, in the app's own style, of the Accessibility list in System Settings with the Whisper Flow row and its switch highlighted. The step completes by itself when the switch is turned on.
+3. Accessibility. Why it is needed: "Lets Say the Word notice the Fn key and paste into the app you are using. It sees shortcut keys only, never what you type." A simplified drawing, in the app's own style, of the Accessibility list in System Settings with the Say the Word row and its switch highlighted. The step completes by itself when the switch is turned on.
 4. Keys, shown only when needed. Either the Globe key is set to do something else (fix: System Settings › Keyboard › "Press 🌐 key to" › "Do Nothing"), or another dictation app is running and would fight over Fn (fix: quit it, or choose Ctrl+Option here).
 5. Try it. A practice text field and three short exercises, each ticked off as it is done: hold Fn and say a sentence; press Fn twice for hands-free; press Esc to cancel, then Undo. A small legend shows what the pill is saying as it changes. If the model is still downloading, the exercises wait behind the bar: "The speech model is still downloading: 412 of 671 MB."
 6. Cleaned mode, optional. The example below; Ollama's state; a choice of local model; "Skip and keep Verbatim".
@@ -230,7 +230,7 @@ Use realistic content. Sample history: a Slack reply about moving a meeting, an 
 
 The icon at 18 px is a monochrome template image, which macOS tints itself, so its states are told apart by shape alone: ready, microphone live, needs attention, paused, saving every dictation. One state at a time; when several apply the order is live, needs attention, paused, saving.
 
-The menu, in order: a status line · the Undo or Retry offer, for as long as the pill shows it, because the pill cannot be reached from the keyboard · Paste last dictation ⌘⌃V · Copy last dictation ⌘⌃C · Recent ▸ (the last five; choosing one copies it) · Mode ▸ · Microphone ▸ · Pause dictation for 1 hour (shown as "Resume dictation" while paused) · Open Whisper Flow · Advanced ▸ (Save every dictation, Show saved dictations, Show Log) · Buy me a coffee… · Quit. A note to you, not menu text: pausing turns the shortcuts off, for games or presenting.
+The menu, in order: a status line · the Undo or Retry offer, for as long as the pill shows it, because the pill cannot be reached from the keyboard · Paste last dictation ⌘⌃V · Copy last dictation ⌘⌃C · Recent ▸ (the last five; choosing one copies it) · Mode ▸ · Microphone ▸ · Pause dictation for 1 hour (shown as "Resume dictation" while paused) · Open Say the Word · Advanced ▸ (Save every dictation, Show saved dictations, Show Log) · Buy me a coffee… · Quit. A note to you, not menu text: pausing turns the shortcuts off, for games or presenting.
 
 ### 5. App icon
 
@@ -241,7 +241,7 @@ On the macOS rounded-square shape, checked at 1024, 32 and 16 px, with a dark va
 The app is free and open source, and its maker would like a modest way to be thanked. It must never interrupt work.
 - On About: two or three sentences from the maker, a "Buy me a coffee" button, and the line "Opens buymeacoffee.com in your browser".
 - A small, quiet link at the foot of the sidebar. In the menu-bar menu, the item named in section 4.
-- After a milestone ("Whisper Flow has typed 10,000 words for you."), the figures line on Home gains that one sentence and the quiet link, until dismissed. Once only.
+- After a milestone ("Say the Word has typed 10,000 words for you."), the figures line on Home gains that one sentence and the quiet link, until dismissed. Once only.
 - Never on the pill, never during a dictation, never as a pop-up or a badge. Use an original cup glyph and plain text, not the platform's own button image or widget.
 
 ## Accessibility

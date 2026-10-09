@@ -103,7 +103,8 @@ const DICTATION_APPS = ['Wispr Flow']
  *
  * Each would record the microphone at a synthetic `Fn`, paste into the app in front, and
  * paste its owner's last dictation into the test's document at the paste-last chord. So
- * these count: a known dictation app; Whisper Flow in any build, however it was started;
+ * these count: a known dictation app; Say the Word (or its former name, Whisper Flow)
+ * in any build, however it was started;
  * and this project run from source, as `npm run dev` runs it, unless started with
  * `--hidden`, as the tests start their own instances.
  */
@@ -113,12 +114,17 @@ export function dictationAppIn(processes, electron) {
     const bundle = line.indexOf('.app/')
     if (bundle !== -1 && line.startsWith('Contents/MacOS/', bundle + '.app/'.length)) {
       const name = line.slice(line.lastIndexOf('/', bundle) + 1, bundle)
-      if (DICTATION_APPS.includes(name) || name.startsWith('Whisper Flow')) return name
+      if (
+        DICTATION_APPS.includes(name) ||
+        name.startsWith('Say the Word') ||
+        name.startsWith('Whisper Flow')
+      )
+        return name
     }
     const fromSource = line === electron || line.startsWith(`${electron} `)
     if (fromSource && !/\s--hidden(\s|$)/.test(line)) {
       // With what it was started with: this project's Electron runs other things too.
-      return `Whisper Flow run from source (electron${line.slice(electron.length)})`
+      return `Say the Word run from source (electron${line.slice(electron.length)})`
     }
   }
   return null

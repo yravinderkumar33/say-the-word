@@ -4,7 +4,16 @@ import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 export default defineConfig(
-  globalIgnores(['out/', 'dist/', 'node_modules/', 'native/', 'resources/', '.claude/']),
+  // The independent video project has its own dependencies and lint configuration.
+  globalIgnores([
+    'out/',
+    'dist/',
+    'node_modules/',
+    'native/',
+    'resources/',
+    '.claude/',
+    'promo-video/',
+  ]),
   js.configs.recommended,
   tseslint.configs.recommended,
   {
