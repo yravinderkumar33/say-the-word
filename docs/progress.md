@@ -2,6 +2,14 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, night: README audited for promotion
+
+**What was done.** The owner installed the DMG on a fresh profile; it worked. The owner then asked for the README to be audited for promotion on several platforms. It was rewritten for visitors first. The video cover is now the hero image, followed by the Download button and a release badge. Then: why the app exists, features with screenshots, privacy, install, a FAQ (cost, Intel, languages, the two common problems), how it works, and, condensed, building from source, roadmap, contributing, acknowledgements and licence.
+
+**Removed.** The repeated pill image at the top, the "early development" badge (the release badge replaces it), the full command table (five commands kept), the project layout, the note about compatibility folder names, the finished roadmap items and the internal licence-audit item. The Wispr Flow disclaimer is shortened to one sentence.
+
+**Checked.** Every claim against the code and `benchmarks.md`: the gestures, Control+Option as the alternative key, history kept for 7 days, 30 days or until deleted, the accessibility settings, 108 ms, 402 ms and 0.9 s. Every repository path the README links to exists, and every external link answered HTTP 200. Prettier passes.
+
 ## 2026-10-09, evening: Say the Word 0.1.0 released
 
 **What was done.** The owner created a Developer ID Application certificate (team `Z7UCX6HB7G`) and a `notarytool` profile, `say-the-word`. The version is now 0.1.0. `npm run release` produced `Say-the-Word-arm64.dmg` (SHA-256 `d2f2b54df5e538b1481e2e89914136ce9cb7447f50d0216024be0dc795749096`), published as release v0.1.0 on GitHub. It is a normal release, not a pre-release, because GitHub's `releases/latest` link skips pre-releases; the README and the release notes call it an early preview. The README has a Download button and install steps, linking to `releases/latest/download/Say-the-Word-arm64.dmg`. Two roadmap items are now done: Developer ID signing and notarization, and the licence notices.
