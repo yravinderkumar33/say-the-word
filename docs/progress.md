@@ -2,6 +2,14 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, evening: Say the Word 0.1.0 released
+
+**What was done.** The owner created a Developer ID Application certificate (team `Z7UCX6HB7G`) and a `notarytool` profile, `say-the-word`. The version is now 0.1.0. `npm run release` produced `Say-the-Word-arm64.dmg` (SHA-256 `d2f2b54df5e538b1481e2e89914136ce9cb7447f50d0216024be0dc795749096`), published as the v0.1.0 pre-release on GitHub. The README has a Download button and install steps, linking to `releases/latest/download/Say-the-Word-arm64.dmg`. Two roadmap items are now done: Developer ID signing and notarization, and the licence notices.
+
+**Evidence.** Apple accepted the app and then the DMG. `stapler validate` passed. `spctl` reports `accepted, source=Notarized Developer ID` for the app (execute) and the DMG (open). Every package check passed, including every smoke check except transcription, which is skipped because the release build ignores the test recording.
+
+**Problems on the way, and fixes.** (1) electron-builder tried to publish to GitHub on its own because of the git remote; it now runs with `--publish never`. (2) Apple's timestamp server once failed to answer for one file ("A timestamp was expected but was not found"); the build step now retries once (`p-retry`). (3) Between two runs the notary profile disappeared from the login keychain, for reasons not found; the owner stored it again.
+
 ## 2026-10-09, evening: a release build for download
 
 **Decision (owner: "you decide").** The download is a DMG of the release identity (`electron-builder.yml`: bundle id `app.whisperflow.desktop`, every test switch ignored). It is signed with a Developer ID, notarized and stapled, and published as a GitHub Release, never committed. The README's download link will point at `releases/latest/download/Say-the-Word-arm64.dmg`, a name that stays the same from one release to the next. A development-signed build is not offered: on someone else's Mac, Gatekeeper refuses an app signed only with an Apple Development certificate.

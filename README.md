@@ -12,6 +12,8 @@ Open-source, local-first dictation for macOS. Speech recognition runs on your ma
 ![Platform: macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20Silicon-lightgrey)
 ![Status: early development](https://img.shields.io/badge/status-early%20development-orange)
 
+<a href="https://github.com/yravinderkumar33/say-the-word/releases/latest/download/Say-the-Word-arm64.dmg"><img src="https://img.shields.io/badge/Download_for_Mac-Apple_Silicon-black?style=for-the-badge&logo=apple" alt="Download Say the Word for Mac (Apple Silicon)" /></a>
+
 </div>
 
 ---
@@ -114,7 +116,17 @@ On an Apple M4 with 16 GB (details in [`docs/benchmarks.md`](docs/benchmarks.md)
 | Release to text pasted (Verbatim, 9 s dictations) | median **402 ms**, p95 448 ms |
 | Release to text pasted (Cleaned, `qwen3.5:4b`)    | median about **0.9 s**        |
 
-## Requirements
+## Download
+
+**[Download Say the Word for Mac](https://github.com/yravinderkumar33/say-the-word/releases/latest/download/Say-the-Word-arm64.dmg)**: macOS 14 or later on Apple Silicon. The app is signed and notarized by Apple. [All releases](https://github.com/yravinderkumar33/say-the-word/releases)
+
+1. Open the DMG and drag **Say the Word** into Applications.
+2. Open it from Applications. It lives in the menu bar, and the setup guide opens on the first launch.
+3. The setup guide asks for **Microphone** and **Accessibility** access and downloads the speech model (about 670 MB, once). Nothing else is downloaded.
+
+This is an early preview. Updates are not automatic yet: to update, download the latest release and replace the app.
+
+## Requirements for building from source
 
 - macOS 14 or later on Apple Silicon
 - Node 22.13 or later
@@ -194,10 +206,11 @@ When a dictation doesn't arrive, the pill says why in a few words, and the Histo
 
 ## Status and roadmap
 
-Say the Word is in **early development**. Dictation works end to end every day on the author's Mac, and the core is heavily tested, but there is no signed, notarized release yet. Before one, it needs:
+Say the Word is in **early development**: the first signed, notarized preview is out, dictation works end to end every day on the author's Mac, and the core is heavily tested. Still to come:
 
-- [ ] Developer ID signing, notarization and a DMG
-- [ ] Licence notices bundled in the app, and a licence audit of the speech library's prebuilt binary
+- [x] Developer ID signing, notarization and a DMG
+- [x] Licence notices bundled in the app
+- [ ] A licence audit of the speech library's prebuilt binary
 - [ ] A manual "Check for updates" that respects the network policy
 - [ ] More languages through a Whisper-based engine behind the same interface
 - [ ] Windows and Linux (the key tap, paste and speech parts are already behind interfaces)

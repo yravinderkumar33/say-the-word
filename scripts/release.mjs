@@ -10,6 +10,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import pRetry from 'p-retry'
 import { take } from './lib/build-output.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -53,24 +54,42 @@ if (inUse) {
   process.exit(1)
 }
 const staging = join(root, 'dist', '.release-staging')
-rmSync(staging, { recursive: true, force: true })
-run(
-  join(root, 'node_modules', '.bin', 'electron-builder'),
-  [
-    '--config',
-    'electron-builder.yml',
-    '--mac',
-    'dmg',
-    '--arm64',
-    `-c.directories.output=${staging}`,
-    '-c.mac.notarize=true',
-    `-c.dmg.artifactName=${dmgName}`,
-  ],
+// Apple's timestamp server, asked once for each of the bundle's files, now and then fails
+// to answer one ("A timestamp was expected but was not found"): the build is tried again.
+await pRetry(
+  () => {
+    rmSync(staging, { recursive: true, force: true })
+    const result = spawnSync(
+      join(root, 'node_modules', '.bin', 'electron-builder'),
+      [
+        '--config',
+        'electron-builder.yml',
+        '--mac',
+        'dmg',
+        '--arm64',
+        `-c.directories.output=${staging}`,
+        '-c.mac.notarize=true',
+        `-c.dmg.artifactName=${dmgName}`,
+        // Publishing is its own step, after the checks below.
+        '--publish',
+        'never',
+      ],
+      {
+        cwd: root,
+        stdio: 'inherit',
+        env: {
+          ...process.env,
+          // electron-builder.env names the development identity; this build uses the other.
+          CSC_NAME: identity.replace(/^Developer ID Application: /, ''),
+          APPLE_KEYCHAIN_PROFILE: profile,
+        },
+      },
+    )
+    if (result.status !== 0) throw new Error(`electron-builder exited with ${result.status}`)
+  },
   {
-    ...process.env,
-    // electron-builder.env names the development identity; this build uses the other.
-    CSC_NAME: identity.replace(/^Developer ID Application: /, ''),
-    APPLE_KEYCHAIN_PROFILE: profile,
+    retries: 1,
+    onFailedAttempt: ({ error }) => console.error(`${error.message}; trying once more`),
   },
 )
 const appDir = join(staging, 'mac-arm64')

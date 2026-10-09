@@ -1,7 +1,7 @@
 {
   "name": "say-the-word",
   "productName": "Say the Word",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Local-first dictation for macOS: hold a key, speak, and the text lands where you were typing.",
   "private": true,
   "license": "MIT",
