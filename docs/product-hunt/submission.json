@@ -1,0 +1,22 @@
+{
+  "name": "Say the Word",
+  "tagline": "Free, open-source dictation that stays on your Mac",
+  "description": "Hold a key, speak, and paste your words where you’re typing. Say the Word is free, open-source dictation for Apple Silicon Macs. Speech recognition runs locally, with no account, subscription or telemetry. Use hands-free mode, recover missed pastes, and optionally tidy text with a local Ollama model. Works offline after a one-time model download. Requires macOS 14+.",
+  "firstComment": "Hi Product Hunt! I’m Ravinder, the maker of Say the Word.\n\nThe goal is simple: hold a key, speak, and get text into the app you’re using, with speech recognition running on your own Mac. It’s free and MIT-licensed, with no account, subscription or telemetry.\n\nThis first release includes hold-to-talk and hands-free dictation, copy and paste recovery, optional history, and a Privacy page showing what the app stores and contacts. An optional local Ollama model can tidy hesitations and repeated words. Checks flag common unwanted edits, and you can compare the original transcript with the cleaned text.\n\nA few practical details: you’ll need an Apple Silicon Mac with macOS 14+, Microphone and Accessibility permissions, and a one-time speech-model download of about 670 MB. After that, core dictation works offline. Ollama is optional. Updates currently use a manual download.\n\nThis is an early release. I’d especially appreciate feedback on recognition with different voices, pasting into the apps you use, and the first-run experience. If something goes wrong, please tell me which Mac and app you’re using—there’s no need to share private dictation text.\n\nThe signed, notarized download and source code are on GitHub: https://github.com/yravinderkumar33/say-the-word",
+  "productUrl": "https://github.com/yravinderkumar33/say-the-word",
+  "downloadUrl": "https://github.com/yravinderkumar33/say-the-word/releases/latest/download/Say-the-Word-arm64.dmg",
+  "productHuntUrl": "https://www.producthunt.com/products/say-the-word?launch=say-the-word",
+  "maker": "yravinderkumar33",
+  "pricing": "Free",
+  "openSource": true,
+  "tags": ["Productivity", "Open Source", "Artificial Intelligence"],
+  "scheduledAt": "2026-10-10T07:01:00Z",
+  "scheduledIndiaTime": "2026-10-10 12:31 Asia/Kolkata",
+  "thumbnail": "thumbnail-240.png",
+  "gallery": [
+    "01-speak-naturally.png",
+    "02-local-cleanup.png",
+    "03-private-by-design.png",
+    "04-hands-free.png"
+  ]
+}

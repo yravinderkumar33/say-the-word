@@ -4,6 +4,15 @@ Task status for the plan in [03 Implementation phases](03-implementation-phases.
 
 **Legend:** `[ ]` not started · `[~]` in progress · `[x]` done and verified · `[!]` waiting on a person
 
+## Product Hunt launch — 2026-10-09
+
+- [x] Completed the maker's Product Hunt profile: name, headline, bio, product link and relevant interests. Existing avatar and social links retained.
+- [x] Prepared and visually checked four 1270×760 gallery images and an app thumbnail. Reusable source and PNGs are in `docs/product-hunt/`.
+- [x] Submitted Say the Word as free and open source, with Ravinder Kumar as maker, the GitHub product page, a direct DMG download, three launch tags and a pinned maker comment.
+- [x] Product Hunt confirmed the launch is scheduled for **2026-10-10 at 00:01 America/Los_Angeles (12:31 Asia/Kolkata)**. [Scheduled listing](https://www.producthunt.com/products/say-the-word?launch=say-the-word).
+- [x] Qualified README claims about speed, recognition, cleanup, audio storage and recovery; replaced the Home QA screenshot with completed setup; preserved the concurrently added comparison table while correcting its audio and certification cells.
+- Actual live visibility and community response can only be assessed after the scheduled launch. Product Hunt controls featuring; a scheduled post does not guarantee a homepage feature.
+
 ## Product identity and explainer — 2026-10-09
 
 - The owner chose **Say the Word** as the public product name. Current interface copy and builds use it; local packages are named `Say the Word Dev.app`.

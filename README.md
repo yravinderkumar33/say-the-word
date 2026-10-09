@@ -14,7 +14,7 @@ Free, open-source dictation for macOS. Speech recognition runs on your Mac, an o
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20Silicon-lightgrey)
 
-[Watch the 36-second video](docs/media/say-the-word-demo.mp4) · [Features](#features) · [How it compares](#how-it-compares) · [Privacy](#privacy-in-plain-terms) · [Install](#install)
+[Watch the 36-second video](docs/media/say-the-word-demo.mp4) · [Features](#features) · [How it compares](#how-it-compares) · [Privacy](#privacy-in-plain-terms) · [Install](#install) · [Product Hunt](https://www.producthunt.com/products/say-the-word?launch=say-the-word)
 
 </div>
 
@@ -36,16 +36,16 @@ Say the Word gives you fast hold-to-talk dictation in every app, with **every st
 
 Cloud dictation apps such as [Wispr Flow](https://wisprflow.ai) and Say the Word make different trade-offs. As of October 2026, from Wispr Flow's own [pricing](https://wisprflow.ai/pricing), [privacy](https://wisprflow.ai/privacy) and [language](https://docs.wisprflow.ai/articles/3191899797-use-flow-with-multiple-languages) pages:
 
-|                           | Say the Word                             | Wispr Flow                                                                    |
-| ------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------- |
-| Where speech becomes text | **On your Mac**                          | In the cloud                                                                  |
-| Works offline             | **Yes**, after a one-time model download | Needs a connection to transcribe                                              |
-| Price                     | **Free**, no word limit                  | Free up to 2,000 words a week on desktop; Pro $15 a month ($12 billed yearly) |
-| Source code               | **Open** (MIT)                           | Closed                                                                        |
-| Audio                     | Never written to disk                    | Deleted once transcribed, unless you turn on cloud storage                    |
-| Languages                 | 25 European languages                    | **100+**                                                                      |
-| Platforms                 | Mac with Apple Silicon                   | **Mac, Windows, iOS and Android**                                             |
-| For teams                 | No servers, so nothing to certify        | **SOC 2 Type II, ISO 27001, HIPAA** with a signed agreement, team admin       |
+|                           | Say the Word                                       | Wispr Flow                                                                    |
+| ------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Where speech becomes text | **On your Mac**                                    | In the cloud                                                                  |
+| Works offline             | **Yes**, after a one-time model download           | Needs a connection to transcribe                                              |
+| Price                     | **Free**, no word limit                            | Free up to 2,000 words a week on desktop; Pro $15 a month ($12 billed yearly) |
+| Source code               | **Open** (MIT)                                     | Closed                                                                        |
+| Audio                     | In memory by default; saving is opt-in             | Deleted once transcribed, unless you turn on cloud storage                    |
+| Languages                 | 25 European languages                              | **100+**                                                                      |
+| Platforms                 | Mac with Apple Silicon                             | **Mac, Windows, iOS and Android**                                             |
+| For teams                 | No team admin or compliance certifications claimed | **SOC 2 Type II, ISO 27001, HIPAA** with a signed agreement, team admin       |
 
 If you want many languages, your phone, or team features, Wispr Flow is the stronger choice. If your words must never leave your Mac, or you want to read the code that handles them, choose Say the Word.
 
@@ -63,11 +63,11 @@ If you want many languages, your phone, or team features, Wispr Flow is the stro
 
 <table>
 <tr>
-<td width="50%"><img src="docs/qa-2026-10-05/screenshots/home-light.png" alt="Home: ready to dictate, with the mode, the microphone, the gestures and recent dictations" /></td>
+<td width="50%"><img src="docs/product-hunt/source/first-run-ready-light.png" alt="Guided setup complete: dictation gestures, the menu bar, the pill and open at login" /></td>
 <td width="50%"><img src="docs/qa-2026-10-05/screenshots/history-opened-dark.png" alt="A dictation in the history: what was heard beside what was written, and the timings" /></td>
 </tr>
 <tr>
-<td><sub><b>Home:</b> the mode, the microphone, the gestures and your recent dictations.</sub></td>
+<td><sub><b>Guided setup:</b> learn the gestures and start dictating.</sub></td>
 <td><sub><b>History:</b> what was heard beside what was written, and how long each step took.</sub></td>
 </tr>
 <tr>
