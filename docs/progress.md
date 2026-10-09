@@ -2,6 +2,10 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, night: a comparison with Wispr Flow in the README
+
+At the owner's request, the README has a "How it compares" section. It is dated (October 2026), its figures come only from Wispr Flow's own pricing, privacy and language pages (linked), and it gives Wispr Flow the rows it wins: languages, platforms, and certifications and team features. It also says in plain words when to choose which app. Left out on purpose: any claim the sources do not support (for example about third-party processors or account requirements), and any "clone" or "free Wispr Flow" wording, given the project's former name. The not-affiliated sentence stays. Check the figures again before each round of promotion: their prices and terms can change.
+
 ## 2026-10-09, night: an animated demo at the top of the README
 
 GitHub does not play a video stored in the repository inside a README: a `<video>` tag is kept only for a `user-attachments` URL, which only the web editor can create. So the README now opens with `docs/media/say-the-word-demo.gif` (948 KB, 1200 px, 20 fps, 8.2 s, looping). It is the explainer's hold, speak, release scene (4.9 to 13.1 s), made with ffmpeg using a generated palette, and it links to the full MP4. The still cover image stays in `docs/media/`, but the README no longer uses it.

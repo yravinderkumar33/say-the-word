@@ -14,7 +14,7 @@ Free, open-source dictation for macOS. Speech recognition runs on your Mac, an o
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![macOS 14+ on Apple Silicon](https://img.shields.io/badge/macOS-14%2B%20%C2%B7%20Apple%20Silicon-lightgrey)
 
-[Watch the 36-second video](docs/media/say-the-word-demo.mp4) · [Features](#features) · [Privacy](#privacy-in-plain-terms) · [Install](#install)
+[Watch the 36-second video](docs/media/say-the-word-demo.mp4) · [Features](#features) · [How it compares](#how-it-compares) · [Privacy](#privacy-in-plain-terms) · [Install](#install)
 
 </div>
 
@@ -27,18 +27,35 @@ Voice typing is one of the biggest productivity tools on a computer, and for peo
 Say the Word gives you fast hold-to-talk dictation in every app, with **every step running on your own Mac**:
 
 - **Private by design.** No account, no cloud, no telemetry. Your voice and your text stay on your Mac.
-- **Fast.** In Verbatim mode, text appears about 0.4 seconds after you let go of the key.
+- **Fast.** Verbatim mode took a median of about 0.4 seconds from key release to the paste request in synthetic-speech tests on an M4 Mac with 16 GB. See the [measurements](#how-it-works) below.
 - **Works everywhere you type.** Mail, Slack, Notes, your browser, your code editor.
 - **Works offline.** After a one-time model download, it needs no internet.
 - **Open source.** MIT-licensed: anyone can read the code and check every privacy claim.
+
+## How it compares
+
+Cloud dictation apps such as [Wispr Flow](https://wisprflow.ai) and Say the Word make different trade-offs. As of October 2026, from Wispr Flow's own [pricing](https://wisprflow.ai/pricing), [privacy](https://wisprflow.ai/privacy) and [language](https://docs.wisprflow.ai/articles/3191899797-use-flow-with-multiple-languages) pages:
+
+|                           | Say the Word                             | Wispr Flow                                                                    |
+| ------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------- |
+| Where speech becomes text | **On your Mac**                          | In the cloud                                                                  |
+| Works offline             | **Yes**, after a one-time model download | Needs a connection to transcribe                                              |
+| Price                     | **Free**, no word limit                  | Free up to 2,000 words a week on desktop; Pro $15 a month ($12 billed yearly) |
+| Source code               | **Open** (MIT)                           | Closed                                                                        |
+| Audio                     | Never written to disk                    | Deleted once transcribed, unless you turn on cloud storage                    |
+| Languages                 | 25 European languages                    | **100+**                                                                      |
+| Platforms                 | Mac with Apple Silicon                   | **Mac, Windows, iOS and Android**                                             |
+| For teams                 | No servers, so nothing to certify        | **SOC 2 Type II, ISO 27001, HIPAA** with a signed agreement, team admin       |
+
+If you want many languages, your phone, or team features, Wispr Flow is the stronger choice. If your words must never leave your Mac, or you want to read the code that handles them, choose Say the Word.
 
 ## Features
 
 - **Hold to talk.** Hold `Fn`, speak, let go: the text is pasted at your cursor.
 - **Hands-free.** Press `Fn` twice (or `Fn`+`Space`, or click the pill) and speak with no key held. Press `Fn` again to stop.
-- **Cleaned mode.** A local [Ollama](https://ollama.com) model removes "um", false starts and repeated words. A guard checks every result: if the model is slow or changes a number, a name or a "not", you get a rules-only cleanup instead, on time.
-- **Verbatim mode.** Exactly what you said, with punctuation and capitals.
-- **Your text is never lost.** `Esc` cancels and Undo brings it back. `Cmd`+`Ctrl`+`V` pastes your last dictation again. If a paste can't happen, the pill offers Copy.
+- **Cleaned mode.** Rules and an optional local [Ollama](https://ollama.com) model remove "um", false starts and repeated words. Checks look for unwanted edits, including changed numbers and negations. If a check flags the result or the model takes too long, the app falls back to rules-only cleanup. You can compare the original and cleaned text in History.
+- **Verbatim mode.** The speech recognizer's original transcript, with punctuation and capitals.
+- **Recover missed pastes.** `Esc` cancels and Undo brings the dictation back while it is offered. `Cmd`+`Ctrl`+`V` pastes your last available dictation again. If a paste can't happen, the pill offers Copy. Recovery stays in memory until you quit.
 - **Safe with passwords.** When macOS reports a password field, the app never pastes automatically.
 - **Your choice of key.** No `Fn` key, or another app already uses it? Use `Control`+`Option` instead.
 - **History you control.** See what was heard beside what was written, and how long each step took. Kept in memory only, unless you choose to save it.
@@ -65,13 +82,13 @@ Say the Word gives you fast hold-to-talk dictation in every app, with **every st
 
 ## Privacy, in plain terms
 
-|                 |                                                                                                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Audio**       | The microphone is on only while you dictate. Audio is turned into text on your Mac and **never written to disk**.                                                  |
-| **Transcripts** | Kept in memory until you quit. To keep them for 7 days, 30 days or until you delete them, you choose it, and macOS asks you to confirm before anything is written. |
-| **Network**     | **None in Verbatim mode.** Cleaned mode talks only to Ollama on your own Mac (`127.0.0.1`). The speech model is downloaded once, when you ask.                     |
-| **Logs**        | Record what happened (key presses, states, why a paste was refused), **never what you said**.                                                                      |
-| **Deleting**    | The Privacy page lists everything stored, with its size, and deletes any of it.                                                                                    |
+|                 |                                                                                                                                                                                                   |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Audio**       | Dictation audio is processed on your Mac and **held in memory by default**. Recordings and their text are saved only if you explicitly enable **Advanced › Save Every Dictation** for evaluation. |
+| **Transcripts** | Kept in memory until you quit. To keep them for 7 days, 30 days or until you delete them, you choose it, and macOS asks you to confirm before anything is written.                                |
+| **Network**     | **None in Verbatim mode.** Cleaned mode talks only to Ollama on your own Mac (`127.0.0.1`). The speech model is downloaded once, when you ask.                                                    |
+| **Logs**        | Record what happened (key presses, states, why a paste was refused), **never what you said**.                                                                                                     |
+| **Deleting**    | The Privacy page lists everything stored, with its size, and deletes any of it.                                                                                                                   |
 
 These rules are enforced in code and covered by tests: see [Architecture and behaviour](docs/02-architecture-and-behaviour.md).
 
@@ -96,7 +113,7 @@ Updates are not automatic yet. To update, download the latest release and replac
 
 **Which languages does it understand?** The speech model, NVIDIA's [Parakeet v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3), recognizes 25 European languages, including English, French, German, Spanish and Italian. The cleanup rules are tuned for English.
 
-**A dictation didn't arrive. What happened?** The pill says why in a few words, and the History page explains it, with what you can do about it. Your text is never lost: use Copy on the pill, or press `Cmd`+`Ctrl`+`V` to paste your last dictation. The log (menu-bar icon › **Show Log**) has the details, and never contains what you said.
+**A dictation didn't arrive. What happened?** The pill says why in a few words, and the History page explains it, with what you can do about it. If the text was recognized, use Copy on the pill, or press `Cmd`+`Ctrl`+`V` to paste your last available dictation. Recovery stays in memory until you quit; it cannot recover every failure. The log (menu-bar icon › **Show Log**) has the details, and never contains what you said.
 
 **It says "Secure Input is on: nothing was pasted".** macOS reports that the app in front is taking a password, so automatic paste is refused. If your cursor isn't in a password field, macOS or that app has left Secure Input on. Copy the text from the pill and paste it yourself.
 
@@ -114,16 +131,16 @@ flowchart LR
 
 - **Electron and TypeScript** hold all the product logic. A small **Swift helper** does what JavaScript can't: seeing the `Fn` key, posting the paste, reading Accessibility.
 - **Speech recognition:** [Parakeet TDT 0.6b v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (int8) on the CPU through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx), in its own process, with Silero voice activity detection.
-- **Cleanup:** fast rules first, then an optional local model with a fixed time limit and a guard that rejects any change of meaning.
+- **Cleanup:** fast rules first, then an optional local model with a fixed time limit and a guard that checks for common unwanted changes. The guard is heuristic: it cannot guarantee that meaning is preserved, so the original transcript stays available for comparison.
 - **Storage:** history in SQLite in a separate process, so a slow disk never delays a paste.
 
-Measured on an Apple M4 with 16 GB ([benchmarks](docs/benchmarks.md)):
+Measured on a MacBook Air with an Apple M4, 16 GB and macOS 26.6 ([benchmarks](docs/benchmarks.md)). The dictation timings use synthetic speech and intercepted paste requests; they do not measure accuracy on real voices or the time taken by every destination app. Results vary with your Mac, recording and cleanup model.
 
-| Measure                                  | Result                        |
-| ---------------------------------------- | ----------------------------- |
-| Key press to microphone live             | median **108 ms**, p95 119 ms |
-| Key release to text pasted, Verbatim     | median **402 ms**, p95 448 ms |
-| Key release to text pasted, Cleaned (4B) | median about **0.9 s**        |
+| Measure                                    | Result                        |
+| ------------------------------------------ | ----------------------------- |
+| Dictation start to microphone live         | median **108 ms**, p95 119 ms |
+| Key release to paste request, Verbatim     | median **402 ms**, p95 448 ms |
+| Key release to paste request, Cleaned (4B) | median about **0.9 s**        |
 
 ## Build from source
 
