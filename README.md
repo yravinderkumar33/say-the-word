@@ -125,8 +125,8 @@ On an Apple M4 with 16 GB (details in [`docs/benchmarks.md`](docs/benchmarks.md)
 ## Getting started
 
 ```sh
-git clone https://github.com/yravinderkumar33/whisper-flow.git
-cd whisper-flow
+git clone https://github.com/yravinderkumar33/say-the-word.git
+cd say-the-word
 npm install
 npm run models:download   # the speech model, about 670 MB, once
 npm run dev               # builds the Swift helper, then starts the app with hot reload

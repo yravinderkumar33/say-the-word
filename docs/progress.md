@@ -2,6 +2,10 @@
 
 Newest entry first. Each entry records what was done, the evidence, any decision or deviation from the plan, and what comes next. Task status lives in [tracker.md](tracker.md).
 
+## 2026-10-09, evening: repository renamed to say-the-word
+
+At the owner's request, the GitHub repository `yravinderkumar33/whisper-flow` was renamed to `yravinderkumar33/say-the-word` (`gh repo rename`). GitHub redirects the old URL, and the local `origin` now points at the new one. The links in the README (the clone command and the folder it creates), the promo video's closing scene source and the suggested post text were updated. The rendered MP4s and `docs/media/say-the-word-demo.mp4` still show the old URL, which redirects; to change that, render them again (`promo-video/README.md`). Dated entries below keep the URL that was current when they were written.
+
 ## 2026-10-09, later: review of the rename, and a package under the new name
 
 **Review.** Read every changed source, script and config file, plus the new `data-paths.ts`. The rename holds together. The bundle ids are unchanged, so macOS keeps the Accessibility and Microphone grants. The previous development package's manifest said `productName: "Whisper Flow"` (read from its `app.asar`), so pinning `userData` to `Whisper Flow` keeps the folder every earlier build used, and with it the single-instance lock. `app.getName()` drives the menus, tray and log folder, so they all show the new name. No display string in `src/` still says Whisper Flow; the remaining references are the compatibility constant and the test guards. No code defect found.

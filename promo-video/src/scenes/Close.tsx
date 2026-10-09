@@ -79,7 +79,7 @@ export const Close = () => {
             letterSpacing: 0.1,
           }}
         >
-          github.com/yravinderkumar33/whisper-flow
+          github.com/yravinderkumar33/say-the-word
         </div>
       </Reveal>
       <Reveal

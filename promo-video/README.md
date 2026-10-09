@@ -1,6 +1,6 @@
 # Say the Word — social explainer
 
-A 36-second product animation based on the app's implemented behaviour, using the owner-confirmed name **Say the Word**. The application now uses the same product name. The existing GitHub repository remains at `yravinderkumar33/whisper-flow`.
+A 36-second product animation based on the app's implemented behaviour, using the owner-confirmed name **Say the Word**. The application now uses the same product name. The GitHub repository is `yravinderkumar33/say-the-word` (the old `whisper-flow` URL redirects there). The rendered MP4s predate the repository rename and show the old URL.
 
 ## Ready-to-post files
 

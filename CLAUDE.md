@@ -2,7 +2,7 @@
 
 Local-first dictation app for macOS: Electron + TypeScript, one Swift helper, a local speech recognizer, optional Ollama cleanup. The design and plan are in `docs/`.
 
-The public name is Say the Word. Existing bundle IDs, `WHISPER_FLOW_*` test switches and the `Whisper Flow` Application Support folder remain stable for compatibility with existing installs; they are not display names. The repository URL and checkout folder also retain their original name.
+The public name is Say the Word. Existing bundle IDs, `WHISPER_FLOW_*` test switches and the `Whisper Flow` Application Support folder remain stable for compatibility with existing installs; they are not display names. The GitHub repository is `yravinderkumar33/say-the-word`; the local checkout folder may still be named `whisper-flow`.
 
 ## Before starting work
 

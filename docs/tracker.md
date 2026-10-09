@@ -8,7 +8,7 @@ Task status for the plan in [03 Implementation phases](03-implementation-phases.
 
 - The owner chose **Say the Word** as the public product name. Current interface copy and builds use it; local packages are named `Say the Word Dev.app`.
 - The README links the 36-second explainer through a clickable cover and a direct video link. The media lives in `docs/media`.
-- The repository URL, macOS bundle IDs, `WHISPER_FLOW_*` switches and existing `~/Library/Application Support/Whisper Flow` data stay compatible with earlier builds. New logs use `~/Library/Logs/Say the Word/main.log`. Historical evidence below retains the names used when it was recorded.
+- The GitHub repository was renamed to `yravinderkumar33/say-the-word` (the old URL redirects). The macOS bundle IDs, `WHISPER_FLOW_*` switches and existing `~/Library/Application Support/Whisper Flow` data stay compatible with earlier builds. New logs use `~/Library/Logs/Say the Word/main.log`. Historical evidence below retains the names used when it was recorded.
 
 - [x] `npm run check`: 1,185 TypeScript tests, 121 Swift tests, type-checking, lint and formatting. Build assertions and all nine quiet smoke checks passed.
 - [x] `npm run pack` (later the same day): `dist/mac-arm64/Say the Word Dev.app`, every package check and nine packaged smoke checks passed; bundle id unchanged.

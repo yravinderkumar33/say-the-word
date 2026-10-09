@@ -6,7 +6,7 @@ Hold fn. Speak. Release. Your words land at your cursor.
 
 On-device speech, hands-free mode, optional local cleanup. Open source.
 
-Early preview → https://github.com/yravinderkumar33/whisper-flow
+Early preview → https://github.com/yravinderkumar33/say-the-word
 
 
 LINKEDIN
@@ -23,7 +23,7 @@ This is an early preview, and I’d love feedback from people who write all day:
 
 Built for Apple Silicon and macOS 14+.
 
-Explore the project: https://github.com/yravinderkumar33/whisper-flow
+Explore the project: https://github.com/yravinderkumar33/say-the-word
 
 
 VIDEO DESCRIPTION / ACCESSIBILITY TEXT
